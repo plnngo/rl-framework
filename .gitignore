@@ -7,3 +7,4 @@ rl-env/Include/site/python3.11/greenlet/
 rl-env/share/man/man1/isympy.1
 /__pycache__/
 *.zip
+results/
