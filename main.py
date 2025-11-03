@@ -1,3 +1,4 @@
+from stable_baselines3 import DQN, PPO
 from multi_target_env import MultiTargetEnv
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,6 +31,21 @@ def visualize_initial_positions(env):
             linewidth=0.5,
         )
         ax.add_patch(rect)
+
+    # --- Draw reward window ---
+    rw_half = env.reward_window_size / 2.0
+    rw_center = env.reward_window_center
+    reward_rect = Rectangle(
+        (rw_center[0] - rw_half, rw_center[1] - rw_half),
+        env.reward_window_size,
+        env.reward_window_size,
+        edgecolor="magenta",
+        facecolor="none",
+        linestyle="-",
+        linewidth=2,
+        label="Reward Window"
+    )
+    ax.add_patch(reward_rect)
 
     # Known targets (blue)
     for tgt in env.targets:
@@ -154,18 +170,18 @@ def run_random_policy_track(env, n_steps):
     positions, covariances = [], []
 
     for step in range(n_steps):
-        # Sample a valid known target ID at each step
-        valid_ids = np.where(env.known_mask)[0]
+       # Sample a valid action from the discrete space
+        # Only track valid known targets
+        valid_ids = np.flatnonzero(env.known_mask)
         if len(valid_ids) == 0:
-            # If no known targets, cannot perform TRACK (could break or switch to SEARCH)
             print("No known targets available for tracking at step", step)
             break
-        target_id = int(env.rng.choice(valid_ids))
 
-        action = {"macro": 1, "micro_search": 0, "micro_track": target_id}
+        # Choose a random valid target
+        action = int(env.rng.choice(valid_ids))
         obs, reward, done, truncated, info = env.step(action)
 
-        print(f"Step {step+1:02d}: TRACK target {target_id}, Reward={reward:.4f}")
+        print(f"Step {step+1:02d}: TRACK target {action}, Reward={reward:.4f}")
 
         fig, ax = plt.subplots(figsize=(8, 8))
 
@@ -184,7 +200,7 @@ def run_random_policy_track(env, n_steps):
 
         # Plot known (blue) + unknown (orange) markers
         for tgt in env.targets:
-            if tgt["id"] == target_id:
+            if tgt["id"] == action:
                 ax.scatter(tgt["x"][0], tgt["x"][1], c="red", s=120, marker="*", label="Tracked Target")
             else:
                 ax.scatter(tgt["x"][0], tgt["x"][1], c="blue", s=40, marker="o", label="Known Target" if step == 0 else "")
@@ -193,7 +209,7 @@ def run_random_policy_track(env, n_steps):
 
         # Draw uncertainty ellipses 
         for tgt in env.targets:
-            if tgt["id"] == target_id:
+            if tgt["id"] == action:
                 plot_cov_ellipse(tgt["P"][:2, :2], tgt["x"][:2], ax, edgecolor="red", alpha=0.7)
             else:
                 plot_cov_ellipse(tgt["P"][:2, :2], tgt["x"][:2], ax, edgecolor="blue", alpha=0.3)
@@ -203,7 +219,7 @@ def run_random_policy_track(env, n_steps):
         ax.set_xlim(-env.space_size / 2, env.space_size / 2)
         ax.set_ylim(-env.space_size / 2, env.space_size / 2)
         ax.set_aspect("equal", "box")
-        ax.set_title(f"Step {step+1}: TRACK target {target_id}")
+        ax.set_title(f"Step {step+1}: TRACK target {action}")
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.grid(False)
@@ -213,7 +229,8 @@ def run_random_policy_track(env, n_steps):
         unique = dict(zip(labels, handles))
         ax.legend(unique.values(), unique.keys(), loc="upper right")
 
-        plt.show(block=True)  # Show each step's figure
+        plt.pause(1)
+        plt.close(fig)  # Show each step's figure
 
         positions.append([tgt['x'][:2] for tgt in env.targets + env.unknown_targets])
         covariances.append([tgt['P'][:2, :2] for tgt in env.targets + env.unknown_targets])
@@ -384,8 +401,109 @@ def plot_results(env, positions, covariances):
     plt.show()
 
 
+
+def visualize_trained_agent(env, model, n_steps=20):
+    """Run the trained agent and visualize its decisions and environment state."""
+    obs, _ = env.reset()
+    fov_half = env.fov_size / 2.0
+
+    for step in range(n_steps):
+        # --- Get action from trained DQN ---
+        action, _ = model.predict(obs, deterministic=False)
+        macro, micro_search, micro_track = env.decode_action(action)
+
+        # --- Apply action in environment ---
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+
+        # --- Create figure ---
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.set_xlim(-env.space_size / 2, env.space_size / 2)
+        ax.set_ylim(-env.space_size / 2, env.space_size / 2)
+        ax.set_aspect("equal", "box")
+        ax.set_title(f"Step {step+1}: Reward={reward:.2f}")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+
+        # --- Draw grid ---
+        for gx, gy in env.grid_coords:
+            rect = Rectangle(
+                (gx - fov_half, gy - fov_half),
+                env.fov_size,
+                env.fov_size,
+                edgecolor="lightgray",
+                facecolor="none",
+                linewidth=0.5,
+            )
+            ax.add_patch(rect)
+        
+        # --- Draw reward window ---
+        rw_half = env.reward_window_size / 2.0
+        rw_center = env.reward_window_center
+        reward_rect = Rectangle(
+            (rw_center[0] - rw_half, rw_center[1] - rw_half),
+            env.reward_window_size,
+            env.reward_window_size,
+            edgecolor="magenta",
+            facecolor="none",
+            linestyle="-",
+            linewidth=2,
+            label="Reward Window"
+        )
+        ax.add_patch(reward_rect)
+
+        # --- Visualize the agent’s chosen action ---
+        if macro == 0:  # SEARCH
+            search_pos = env.grid_coords[micro_search]
+            fov_rect = Rectangle(
+                (search_pos[0] - fov_half, search_pos[1] - fov_half),
+                env.fov_size,
+                env.fov_size,
+                edgecolor="green",
+                facecolor="none",
+                linestyle="--",
+                lw=2,
+                label="Search FOV",
+            )
+            ax.add_patch(fov_rect)
+            print(f"Step {step+1:02d}: Search at {search_pos}, Reward={reward:.4f}")
+        else:  # TRACK
+            target_id = micro_track
+            tgt = env.targets[target_id]
+            ax.scatter(
+                tgt["x"][0], tgt["x"][1],
+                c="red", s=120, marker="*",
+                label=f"Tracked target {target_id}"
+            )
+            print(f"Step {step+1}: TRACK target {target_id}, Reward={reward:.4f}")
+
+        # --- Plot targets ---
+        for tgt in env.targets:
+            ax.scatter(tgt["x"][0], tgt["x"][1], c="blue", label="Known Target")
+
+            # Plot 2D covariance ellipse if available
+            if "P" in tgt:
+                P_xy = tgt["P"][:2, :2]  # take only position covariance
+                plot_cov_ellipse(P_xy, tgt["x"][:2], ax, edgecolor="blue", alpha=0.4)
+
+        for utgt in env.unknown_targets:
+            ax.scatter(utgt["x"][0], utgt["x"][1], c="orange", label="Unknown Target")
+
+        handles, labels = ax.get_legend_handles_labels()
+        unique = dict(zip(labels, handles))
+        ax.legend(unique.values(), unique.keys(), loc="lower left")
+
+        #plt.show(block=True)
+        plt.pause(1)
+        plt.close(fig)
+
+        if done:
+            obs, _ = env.reset()
+
+
 if __name__ == "__main__":
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=3, seed=42)
+    # ****** Test with random policy ******
+    """ env = MultiTargetEnv(n_targets=5, n_unknown_targets=3, seed=42, mode="track")
 
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
@@ -393,5 +511,14 @@ if __name__ == "__main__":
 
     # Run random policy
     #positions, covariances = run_random_policy_search(env, n_steps=10)
-    #positions, covariances = run_random_policy_track(env, n_steps=10)
-    positions, covariances = run_random_policy_combined(env, n_steps=10)
+    #positions, covariances = run_random_policy_track(env, n_steps=55)
+    #positions, covariances = run_random_policy_combined(env, n_steps=10) """
+
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=15, seed=42, mode="search")
+
+    # Load trained model
+    model = PPO.load("ppo2_sensor_tasking_search_gamma09_steps50000.zip", env=env)
+    #model = DQN.load("dqn_sensor_tasking_search_gamma09820_steps50000.zip", env=env)
+
+    # Visualize trained agent
+    visualize_trained_agent(env, model, n_steps=50)
