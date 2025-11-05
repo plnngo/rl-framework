@@ -3,7 +3,7 @@ from stable_baselines3.common.callbacks import CallbackList
 from multi_target_env import MultiTargetEnv
 from train_agent import LivePlotCallback, SharedLivePlot
 
-def train_dqn(params, trial_name="Trial", total_timesteps=50000, plotter=None, color="tab:green"):
+def train_dqn(params, trial_name="Trial", total_timesteps=50000, plotter=None, color="tab:green", seed=None):
     """
     Train a single DQN model with the given hyperparameters.
     Returns the trained model and final evaluation score.
@@ -12,7 +12,7 @@ def train_dqn(params, trial_name="Trial", total_timesteps=50000, plotter=None, c
     mode = "search"
 
     # Create environment
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=15, mode=mode)
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=15, seed=seed, mode=mode)
 
     model = DQN(
         "MlpPolicy",
