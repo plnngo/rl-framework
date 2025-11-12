@@ -1,3 +1,4 @@
+import os
 import matplotlib.pyplot as plt
 import numpy as np
 from stable_baselines3 import DQN, PPO
@@ -113,85 +114,107 @@ def run_random_policy_with_plot(env, plotter, name="Random", total_timesteps=50_
         
 def main():
 
-    mode = mode="search"
+    mode = "search"
+
+    save_dir = "agents"
+    os.makedirs(save_dir, exist_ok=True)
 
     # Create shared plotter
     plotter = SharedLivePlot("Training Progress: PPO vs Random Policy")
 
     # Create environment
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=15, seed=42, mode=mode)
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode=mode)
 
     # Initialize DQN
-    gamma = 0.9
-    total_timesteps = 50_000
+    gamma = 0.9148472308668416  #gamma = 0.9682225477210584 #track
+    total_timesteps = 60_000
 
     # --- Run random policy ---
     print("Running random policy baseline...")
     run_random_policy_with_plot(env, plotter, name="Random", total_timesteps=total_timesteps)
 
-    # DQN tracking works with this set up
-    """ model = DQN(
-        "MlpPolicy", env,
-        gamma=gamma,
-        exploration_fraction=0.3,
-        exploration_final_eps=0.1,
-        learning_starts=1000,
-        target_update_interval=500,
-        buffer_size=50_000,
-        train_freq=4,
-        verbose=1
-    ) """
-
+    print("Training PPO agent to search...")
     model = PPO(
         "MlpPolicy",
         env,
         gamma=gamma,
-        n_steps=256,          # rollout length per policy update
-        ent_coef=0.01,         # encourage exploration
-        learning_rate=3e-4,
-        vf_coef=0.5,           # value function loss weight
-        max_grad_norm=0.5,
-        gae_lambda=0.95,       # GAE for smoother advantage estimates
+        n_steps=1024,       #256,          # rollout length per policy update
+        ent_coef=0.025794301927672722,  #0.01,         # encourage exploration
+        learning_rate=9.530911967958957e-05,    #3e-4,
+        vf_coef=0.217347167922477,  #0.5,           # value function loss weight
+        max_grad_norm=0.5693505994783516,   #0.5,
+        gae_lambda=0.808567431707699,   #0.95,       # GAE for smoother advantage estimates
         n_epochs=10,           # optimization epochs per update
-        clip_range=0.2,        # PPO clipping parameter
+        clip_range=0.21812912572546356,     #0.2,        # PPO clipping parameter
         batch_size=64,         # minibatch size
         verbose=1
     )
+    """ print("Training PPO agent to track...")
+    model = PPO(
+        "MlpPolicy",
+        env,
+        gamma=0.9682225477210584,
+        n_steps=128,       #256,          # rollout length per policy update
+        ent_coef=0.03687230703244832,  #0.01,         # encourage exploration
+        learning_rate=3.349227183953058e-05,    #3e-4,
+        vf_coef=0.38050639142707177,  #0.5,           # value function loss weight
+        max_grad_norm=0.4411024602318411,   #0.5,
+        gae_lambda=0.9165059491087159,   #0.95,       # GAE for smoother advantage estimates
+        n_epochs=10,           # optimization epochs per update
+        clip_range=0.3391385210948936,     #0.2,        # PPO clipping parameter
+        batch_size=256,         # minibatch size
+        verbose=1
+    ) """
 
     ppo_callback = LivePlotCallback(plotter, name="PPO", color="tab:orange")
     model.learn(total_timesteps=total_timesteps, callback=ppo_callback)
 
     # Create filename automatically
     gamma_str = str(gamma).replace('.', '')
-    filename = f"ppo2_sensor_tasking_{mode}_gamma{gamma_str}_steps{total_timesteps}"
-    #filename = f"dqn_sensor_tasking_search_gamma{gamma_str}_steps{total_timesteps}"
+    filename = f"{save_dir}/ppo2_sensor_tasking_{mode}_gamma{gamma_str}_steps{total_timesteps}"
 
     # Save trained model
     model.save(filename)
     print(f"Model saved as {filename}.zip")
     
     # --- Train DQN ---
-    print("Training DQN agent...")
+    print("Training DQN agent to search...")
     dqn_model = DQN(
             "MlpPolicy",
             env,
-            gamma=0.9820106516911145,
-            learning_rate=2.7139001406888036e-5,
-            buffer_size=200_000,
+            gamma=0.9111564115590075,    #0.9820106516911145,
+            learning_rate=2.567873776981162e-5,     #2.7e-5,
+            buffer_size=140_000,     #200_000,
             learning_starts=1000,
-            train_freq=16,
+            train_freq=8,          # step-by-step updates to match logging
             batch_size=64,
-            target_update_interval=2500,
-            exploration_fraction=0.23896606821738825,
+            target_update_interval=1000,
+            exploration_fraction=0.2279227219731062,
             exploration_final_eps=0.01,
-            verbose=1
+            verbose=0,
             )
+    
+    """ print("Training DQN agent to track...")
+    dqn_model = DQN(
+            "MlpPolicy",
+            env,
+            gamma=0.9526564282734367,    #0.9820106516911145,
+            learning_rate=0.0004139635188401231,     #2.7e-5,
+            buffer_size=150000,     #200_000,
+            learning_starts=1000,
+            train_freq=1,          # step-by-step updates to match logging
+            batch_size=128,
+            target_update_interval=3000,
+            exploration_fraction=0.3021246896216901,
+            exploration_final_eps=0.01,
+            verbose=0,
+            ) """
 
     dqn_callback = LivePlotCallback(plotter, name="DQN", color="tab:green")
     dqn_model.learn(total_timesteps=total_timesteps, callback=dqn_callback)
 
     # Save DQN model
-    dqn_filename = f"dqn_sensor_tasking_{mode}_gamma09820_steps{total_timesteps}"
+    dqn_filename = f"{save_dir}/dqn_sensor_tasking_{mode}_gamma0911_steps{total_timesteps}"
     dqn_model.save(dqn_filename)
     print(f"DQN model saved as {dqn_filename}.zip")
 
@@ -207,6 +230,7 @@ def main():
 
     # Simple ranking logic
     best = max([("Random", avg_random), ("PPO", avg_ppo), ("DQN", avg_dqn)], key=lambda x: x[1])
+    best = max([("PPO", avg_ppo), ("DQN", avg_dqn)], key=lambda x: x[1])
     print(f"\nBest performer: {best[0]} with average reward {best[1]:.2f}")
 
     plotter.finalize()
