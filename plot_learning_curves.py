@@ -8,11 +8,12 @@ from scipy.interpolate import interp1d
 
 # === CONFIG ===
 save_dir = "results"
-#algos = ["PPO", "DQN", "Random"]
-algos = ["DQN", "Random"]
+algos = ["PPO", "DQN", "Random"]
+#algos = ["MCTS"]
+#algos = ["DQN", "Random"]
 mode = "search"
 alpha = 0.05  # 95% CI
-colors = {"PPO": "tab:orange", "DQN": "tab:green", "Random": "tab:red"}
+colors = {"PPO": "tab:orange", "DQN": "tab:green", "Random": "tab:red", "MCTS": "tab:blue"}
 
 # === Load CSVs and align cumulative timesteps ===
 all_data = {}
