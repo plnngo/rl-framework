@@ -9,10 +9,10 @@ def train_dqn(params, trial_name="Trial", total_timesteps=50000, plotter=None, c
     Returns the trained model and final evaluation score.
     """
 
-    mode = "search"
+    mode = "track"
 
     # Create environment
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=15, seed=seed, mode=mode)
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=seed, mode=mode)
 
     model = DQN(
         "MlpPolicy",
