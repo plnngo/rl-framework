@@ -2,6 +2,8 @@ from stable_baselines3 import DQN, PPO
 from multi_target_env import MultiTargetEnv
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm import trange
 from matplotlib.patches import Ellipse, Rectangle
 
 def plot_cov_ellipse(cov, mean, ax, n_std=1.0, **kwargs):
@@ -400,7 +402,85 @@ def plot_results(env, positions, covariances):
     ax.grid(True)
     plt.show()
 
+def evaluate_agent(env, model=None, n_episodes=100, random_policy=False):
+    """
+    Evaluates an RL agent or random policy on the given environment,
+    tracking episode rewards and detection counts.
 
+    Detection count is inferred by comparing the evolution of the action mask:
+    whenever a new target becomes trackable (mask bit switches from 0 to 1),
+    we count it as a detection.
+
+    Parameters:
+        env: MultiTargetEnv instance
+        model: trained SB3 model (PPO, DQN, etc.)
+        n_episodes: number of episodes
+        random_policy: if True, sample random actions instead of using the model
+
+    Returns:
+        rewards: list of total rewards per episode
+        detections: list of detection counts per episode
+    """
+    rewards = []
+    detections = []
+    detection_count = 0
+    detect_count3 = 0
+
+    for ep in trange(n_episodes, desc="Evaluating"):
+        obs, _ = env.reset()
+        done = False
+        total_reward = 0.0
+        detect_count2 = 0
+
+        # Initialize previous mask to track detection changes
+        prev_mask = env.get_action_mask().copy()
+
+        while not done:
+            if random_policy:
+                action = env.action_space.sample()
+            else:
+                action, _ = model.predict(obs, deterministic=True)
+
+            obs, reward, done, truncated, info = env.step(action)
+            total_reward += reward
+
+            # Compare action mask with previous one to detect new trackable targets
+            if reward>20:
+                detect_count3 = detect_count3 + 1
+            curr_mask = info["action_mask"]
+            # Count newly enabled tracking actions (assuming they correspond to detections)
+            new_detections = np.sum((curr_mask == 1) & (prev_mask == 0))
+            detection_count += int(new_detections)
+            prev_mask = curr_mask.copy()
+
+        rewards.append(total_reward)
+        detections.append(detect_count2)
+
+    return rewards, detections, detect_count3
+
+
+def plot_violin(results_dict, ylabel="Episode Reward"):
+    """
+    Plots a violin plot comparing metrics (e.g., rewards or detections) across agents.
+    """
+    colors = {
+        "PPO": "orange",
+        "DQN": "green",
+        "Random": "red"
+    }
+    
+    data = []
+    labels = []
+    for label, values in results_dict.items():
+        data.extend(values)
+        labels.extend([label] * len(values))
+
+    sns.violinplot(x=labels, y=data, inner="quart", cut=0, palette=colors)
+    plt.xlabel("Agent")
+    plt.ylabel(ylabel)
+    plt.title(f"Distribution of {ylabel}")
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.show()
 
 def visualize_trained_agent(env, model, n_steps=20):
     """Run the trained agent and visualize its decisions and environment state."""
@@ -494,12 +574,46 @@ def visualize_trained_agent(env, model, n_steps=20):
         ax.legend(unique.values(), unique.keys(), loc="lower left")
 
         #plt.show(block=True)
-        plt.pause(1)
+        plt.pause(4)
         plt.close(fig)
 
         if done:
             obs, _ = env.reset()
 
+def plot_detection_bar_chart(results_dict):
+    """
+    Plots a bar chart showing the mean number of detections (count 2) per agent.
+
+    Parameters:
+        results_dict: dict mapping agent name -> list of detection counts per episode
+                      e.g. {"Random": random_detections, "PPO": ppo_detections, "DQN": dqn_detections}
+    """
+    colors = {
+        "PPO": "orange",
+        "DQN": "green",
+        "Random": "red"
+    }
+
+    agents = list(results_dict.keys())
+    means = [np.mean(results_dict[a]) for a in agents]
+    stds = [np.std(results_dict[a]) for a in agents]
+
+    plt.figure(figsize=(7, 5))
+    bars = plt.bar(agents, means, yerr=stds, capsize=6,
+                   color=[colors[a] for a in agents], alpha=0.8)
+
+    plt.xlabel("Agent")
+    plt.ylabel("Total Number of Detections")
+    plt.grid(True, axis='y', linestyle='--', alpha=0.5)
+
+    # Add value labels on top of bars
+    for bar, mean in zip(bars, means):
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, height + 0.1,
+                 f"{mean:.2f}", ha='center', va='bottom', fontsize=10)
+
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
     # ****** Test with random policy ******
@@ -514,11 +628,52 @@ if __name__ == "__main__":
     #positions, covariances = run_random_policy_track(env, n_steps=55)
     #positions, covariances = run_random_policy_combined(env, n_steps=10) """
 
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=15, seed=42, mode="search")
+    """ env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
 
     # Load trained model
-    model = PPO.load("ppo2_sensor_tasking_search_gamma09_steps50000.zip", env=env)
+    model = PPO.load("agents/ppo2_sensor_tasking_search_gamma09_steps50000", env=env)
     #model = DQN.load("dqn_sensor_tasking_search_gamma09820_steps50000.zip", env=env)
 
     # Visualize trained agent
-    visualize_trained_agent(env, model, n_steps=50)
+    visualize_trained_agent(env, model, n_steps=50) """
+    
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
+    n_episodes = 1000
+
+    # ****** Random policy ******
+    random_rewards, random_detections, detect_count2random = evaluate_agent(env, n_episodes=n_episodes, random_policy=True)
+    print(detect_count2random)
+
+    # ****** PPO agent ******
+    ppo_model = PPO.load("agents/ppo2_sensor_tasking_search_gamma09148472308668416_steps60000", env=env)
+    ppo_rewards, ppo_detections, detect_count2ppo = evaluate_agent(env, model=ppo_model, n_episodes=n_episodes)
+    print(detect_count2ppo)
+
+    # ****** DQN agent ******
+    dqn_model = DQN.load("agents/dqn_sensor_tasking_search_gamma0911_steps60000", env=env)
+    dqn_rewards, dqn_detections, detect_count2dqn = evaluate_agent(env, model=dqn_model, n_episodes=n_episodes)
+    print(detect_count2dqn)
+
+    # ****** Plot reward distributions ******
+    reward_results = {
+        "Random": random_rewards,
+        "PPO": ppo_rewards,
+        "DQN": dqn_rewards
+    }
+    plot_violin(reward_results, ylabel="Episode Reward")
+
+    # ****** Plot detection distributions ******
+    detection_results = {
+        "Random": random_detections,
+        "PPO": ppo_detections,
+        "DQN": dqn_detections
+    }
+    plot_violin(detection_results, ylabel="Number of Detections")
+
+    # ****** Plot total detection ******
+    detection_results = {
+        "Random": detect_count2random,
+        "PPO": detect_count2ppo,
+        "DQN": detect_count2dqn
+    }
+    plot_detection_bar_chart(detection_results)
