@@ -3,7 +3,7 @@ import numpy as np
 from scipy.linalg import expm
 
 class MultiTargetEnv(gym.Env):
-    def __init__(self, n_targets=5, n_unknown_targets = 3, space_size=100.0, d_state=4, fov_size=2.0, max_steps=50, seed=None, mode="combined"):
+    def __init__(self, n_targets=5, n_unknown_targets = 3, space_size=100.0, d_state=4, fov_size=2.0, max_steps=20, seed=None, mode="combined"):
         super().__init__()
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
@@ -12,9 +12,11 @@ class MultiTargetEnv(gym.Env):
         self.space_size = space_size
         self.d_state = d_state  # state dimension per target (e.g., x,y,vx,vy)
         self.max_steps = max_steps
-        self.dt = 1.0
-        self.velocity = 1.0
+        self.dt = 1.0           
         self.rng = np.random.default_rng(seed)
+
+        # Parameters related to dynamical motion
+        self.velocity = 1.0         # linear velocity from left to right
 
         # Cholesky size for covariance packing
         self.cholesky_size = d_state * (d_state + 1) // 2
@@ -110,6 +112,35 @@ class MultiTargetEnv(gym.Env):
                 micro_search = None
                 micro_track = action_int - self.n_grid_cells
         return macro, micro_search, micro_track
+    
+    def encode_action(self, macro, micro_search=None, micro_track=None):
+        """
+        Convert hierarchical action (macro + micro) into a flat integer.
+        Mirrors decode_action().
+        
+        Parameters:
+            macro: 0 for search, 1 for track
+            micro_search: index of search grid (if macro==0)
+            micro_track: target index (if macro==1)
+        
+        Returns:
+            action_int: single integer representing the action
+        """
+        if macro == 0:  # SEARCH
+            if micro_search is None:
+                raise ValueError("micro_search must be provided for macro=0")
+            return micro_search
+        elif macro == 1:  # TRACK
+            if micro_track is None:
+                raise ValueError("micro_track must be provided for macro=1")
+            if self.mode == "track":
+                return micro_track
+            elif self.mode == "combined":
+                return self.n_grid_cells + micro_track
+            else:
+                raise ValueError(f"Invalid mode: {self.mode}")
+        else:
+            raise ValueError(f"Invalid macro action: {macro}")
 
     def step(self, action):
         macro, micro_search, micro_track = self.decode_action(action)
