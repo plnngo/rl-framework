@@ -3,16 +3,19 @@
 # -------------------------
 from stable_baselines3 import PPO
 from MacroEnv import MacroEnv
+from multi_target_env import MultiTargetEnv
 
+def testSingleStepAndSynchronisation():
+    envSearch = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
+    envTrack = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="track")
 
-if __name__ == "__main__":
     # 1. Instantiate macro environment with dummy micro agents
     macro_env = MacroEnv(
         n_targets=5,
-        n_unknown_targets=3,
-        fov_size=2.0,
-        search_agent=PPO.load("agents/ppo2_sensor_tasking_search_gamma09148472308668416_steps60000", env=env),
-        track_agent=DummyMicroAgent(n_actions=5)     # number of known targets
+        n_unknown_targets=100,
+        fov_size=4.0,
+        search_agent=PPO.load("agents/ppo_search_trained", env=envSearch),
+        track_agent=PPO.load("agents/ppo_track_trained", env=envTrack)
     )
 
     # 2. Reset macro environment
@@ -30,3 +33,7 @@ if __name__ == "__main__":
     print("\n--- Macro Step 2: Track ---")
     print("Macro reward:", reward)
     print("Next observation shape:", next_obs.shape)
+    
+if __name__ == "__main__":
+
+    testSingleStepAndSynchronisation()
