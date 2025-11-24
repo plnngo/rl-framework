@@ -3,8 +3,10 @@ import numpy as np
 from scipy.linalg import expm
 
 class MultiTargetEnv(gym.Env):
-    def __init__(self, n_targets=5, n_unknown_targets = 3, space_size=100.0, d_state=4, fov_size=2.0, max_steps=20, seed=None, mode="combined"):
+    def __init__(self, n_targets=5, n_unknown_targets = 100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=300, seed=None, mode="combined"):
         super().__init__()
+        self.init_n_target = n_targets
+        self.init_n_unknown_target = n_unknown_targets
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
         self.mode = mode
@@ -16,15 +18,17 @@ class MultiTargetEnv(gym.Env):
         self.rng = np.random.default_rng(seed)
 
         # Parameters related to dynamical motion
-        self.velocity = 1.0         # linear velocity from left to right
+        self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
+        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets)          # contains either linear velocity or turn rate
 
         # Cholesky size for covariance packing
         self.cholesky_size = d_state * (d_state + 1) // 2
         self.obs_dim_per_target = d_state + self.cholesky_size
-        self.max_targets = self.n_targets + self.n_unknown_targets
+        self.max_targets = self.init_n_target + self.init_n_unknown_target
 
         # Default initial covariance for new tracks (make accessible as self.P0)
-        self.P0 = np.eye(self.d_state) * 0.5
+        self.P0 = np.eye(self.d_state) * 0.1
+        self.P0[-2:, -2:] = np.eye(2) * 0.01
         self.Q0 = np.eye(self.d_state) * 0.0
 
         # Discretising entire field 
@@ -63,8 +67,8 @@ class MultiTargetEnv(gym.Env):
         self.known_mask[:self.n_targets] = True
 
         # reward window
-        self.reward_window_size = self.space_size / 2
-        self.reward_window_speed = self.velocity
+        #self.reward_window_size = self.space_size / 2
+        #self.reward_window_speed = self.velocity
 
         self.reset()
 
@@ -72,10 +76,12 @@ class MultiTargetEnv(gym.Env):
         super().reset(seed=seed)
 
         self.step_count = 0
-        self.targets = [self._init_target(i) for i in range(self.n_targets)]
+        self.n_targets = self.init_n_target
+        self.n_unknown_targets = self.init_n_unknown_target
+        self.targets = [self._init_target(i) for i in range(self.init_n_target)]
         self.unknown_targets = [
-            self._init_unknown_target(i + self.n_targets)
-            for i in range(self.n_unknown_targets)
+            self._init_unknown_target(i + self.init_n_target)
+            for i in range(self.init_n_unknown_target)
         ]
         self.visit_counts[:] = 0   # reset search visit counts
 
@@ -83,9 +89,9 @@ class MultiTargetEnv(gym.Env):
         self.last_search_idx = None
         self.prev_search_pos = None
 
-        # Reset reward window
-        self.reward_window_center = np.array([-self.space_size/4, self.space_size/4])
-        self.reward_window_history = [self.reward_window_center.copy()]
+        # known mask
+        self.known_mask = np.zeros(self.max_targets, dtype=bool)
+        self.known_mask[:self.n_targets] = True
 
         self.obs = self._get_obs()
         info = {}  # optional
@@ -158,6 +164,7 @@ class MultiTargetEnv(gym.Env):
             if not self.known_mask[target_id]:
                 # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
                 obs = self._get_obs()
+                self.step_count += 1
                 info = {"invalid_action": True, "action_mask": self.get_action_mask()}
                 return obs, -1.0, False, False, info
             micro = target_id
@@ -166,8 +173,8 @@ class MultiTargetEnv(gym.Env):
         total_iG = 0.0
 
         # Move reward window to the right with each step (same as target dynamics)
-        self.reward_window_center[0] += self.reward_window_speed * self.dt
-        self.reward_window_history.append(self.reward_window_center.copy())
+        #self.reward_window_center[0] += self.reward_window_speed * self.dt
+        #self.reward_window_history.append(self.reward_window_center.copy())
 
         # generate measurement noise covariance (2x2)
         sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
@@ -178,8 +185,12 @@ class MultiTargetEnv(gym.Env):
         # propagate all known targets
         for tgt in self.targets:
 
+            idx = tgt['id']  # global index
+            model = self.motion_model[idx]
+            param = self.motion_params[idx]
+
             # retrieve predictions by propagating each known target
-            tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=self.dt, rng=self.rng)
+            tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
 
             # compute measurement related to action
             if target_id is not None and tgt['id'] == target_id:
@@ -192,8 +203,13 @@ class MultiTargetEnv(gym.Env):
 
         # propagate unknowns
         for utgt in self.unknown_targets:
+
+            idx = utgt['id']
+            model = self.motion_model[idx]
+            param = self.motion_params[idx]
+
             # retrieve predictions by propagating each unknown target
-            utgt['x'], utgt['P'] = MultiTargetEnv.propagate_target_2D(utgt['x'], utgt['P'], utgt.get('Q', self.Q0), dt=self.dt, rng=self.rng)
+            utgt['x'], utgt['P'] = MultiTargetEnv.propagate_target_2D(utgt['x'], utgt['P'], utgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
 
         # If TRACK macro, return here
         if target_id is not None:       
@@ -224,8 +240,6 @@ class MultiTargetEnv(gym.Env):
             if abs(dx) <= fov_halfWidth and abs(dy) <= fov_halfWidth:
                 detections.append(obj)
 
-        
-
         # Compute reward
         if len(detections) > 0:
             threshold = 3.0  # example Mahalanobis threshold
@@ -236,7 +250,7 @@ class MultiTargetEnv(gym.Env):
                 ]
                 # If all distances > threshold --> new detection
                 if all(d > threshold for d in distances):
-                    total_iG = 10.0
+                    total_iG += 10.0
                     # Promote detection to a new known target
                     idx = self.unknown_targets.index(det)
                     self._add_new_tracking_target(idx)
@@ -245,7 +259,7 @@ class MultiTargetEnv(gym.Env):
         # --- SEARCH macro: update visit counts and compute reward ---
         self.visit_counts[grid_idx] += 1
         reward = total_iG
-        exploration_bonus = 5.0 / np.log(self.visit_counts[grid_idx] + 2)
+        exploration_bonus = 1.0 / np.log(self.visit_counts[grid_idx] + 2)
 
         # Penalize staying still
         if hasattr(self, "last_search_idx") and self.last_search_idx == grid_idx:
@@ -255,28 +269,16 @@ class MultiTargetEnv(gym.Env):
 
         # --- Upper-half bonus ---
         if search_pos[1] > 0:  # cell in upper half
-            exploration_bonus += 5.0   
+            exploration_bonus += 1.0   
 
         reward += exploration_bonus
-
-        # --- Reward window bonus (uniform inside window) ---
-        half_w = self.reward_window_size / 2.0
-        x_in_window = abs(search_pos[0] - self.reward_window_center[0]) <= half_w
-        y_in_window = abs(search_pos[1] - self.reward_window_center[1]) <= half_w
-
-        if x_in_window and y_in_window:
-            window_bonus = 5.0  # uniform reward inside window
-        else:
-            window_bonus = 0.0
-
-        reward += window_bonus
 
         # Construct next observation
         obs = self._get_obs()
 
         # Termination
         self.step_count += 1
-        done = self.step_count >= self.max_steps
+        done = (self.step_count >= self.max_steps) #or (reward > 9)
         truncated = False
 
         # Info dict can include diagnostics
@@ -297,7 +299,7 @@ class MultiTargetEnv(gym.Env):
         y0 = self.rng.uniform(y_low, y_high)
 
         pos0 = np.array([x0_left, y0])
-        vel0 = np.array([self.velocity, 0.0])
+        vel0 = np.array([self.motion_params[target_id], 0.0])
         x0 = np.concatenate([pos0, vel0])
         P0 = self.P0.copy()
         Q = np.eye(self.d_state) * 0.
@@ -318,7 +320,9 @@ class MultiTargetEnv(gym.Env):
         x0 = self.rng.uniform(x_low, x_high)
         y0 = self.rng.uniform(y_low, y_high)
         pos0 = np.array([x0, y0])
-        vel0 = np.array([self.velocity, 0.0])  # move rightward
+        vel0 = np.array([1.0, 0.0])         # velocity for CT model
+        if self.motion_model[target_id] == "L":
+            vel0 = np.array([self.motion_params[target_id], 0.0])  # move rightward
         x0_full = np.concatenate([pos0, vel0])
         P0 = self.P0.copy()
         Q = np.eye(self.d_state) * 0.0
@@ -366,11 +370,39 @@ class MultiTargetEnv(gym.Env):
         }
         self.targets.append(new_target)
         self.known_mask[new_id] = True
+        self.n_targets += 1
+        self.n_unknown_targets -= 1
+
 
     @staticmethod
-    def propagate_target_2D(x, P, Q, dt, rng):
-        """Propagate 2D constant velocity target state and covariance."""
-        F = MultiTargetEnv.constant_velocity_F_2D(dt)
+    def propagate_target_2D(x, P, Q, dt, rng, motion_model="L", motion_param=1.0):
+        """
+        Propagate a 2D target state based on its motion model.
+
+        Parameters:
+            x : np.array
+                State vector [x, y, vx, vy]
+            P : np.array
+                Covariance matrix
+            Q : np.array
+                Process noise covariance
+            dt : float
+                Time step
+            rng : np.random.Generator
+                Random number generator for stochastic noise
+            motion_model : str
+                "L" = linear, "T" = coordinated turn
+            motion_param : float
+                Linear velocity for "L", turn rate for "T"
+
+        Returns:
+            x_new, P_new : propagated state and covariance
+        """
+        F = None
+        if motion_model == "L":
+            F = MultiTargetEnv.constant_velocity_F_2D(dt)
+        else:
+            F = MultiTargetEnv.constant_turnrate_F_2D(dt, motion_param)
         w = rng.multivariate_normal(np.zeros(len(x)), Q)
         x_next = F @ x + w
         P_next = F @ P @ F.T + Q
@@ -384,6 +416,35 @@ class MultiTargetEnv(gym.Env):
             [0, 0, 1, 0],
             [0, 0, 0, 1]
         ])
+    
+    @staticmethod
+    def constant_turnrate_F_2D(dt, omega):
+        """
+        Build 4x4 F for state ordering [x, y, vx, vy].
+        """
+        wdt = omega * dt
+        # handle small w via stable evaluations:
+        if abs(wdt) < 1e-8:
+            # Use Taylor expansions directly for the needed terms:
+            # s1 = sin(wdt)/omega  ~= dt * (1 - z^2/6 + z^4/120)
+            # s2 = (1-cos(wdt))/omega ~= dt*(z/2 - z^3/24 + ...)
+            z = wdt
+            s1 = dt * (1.0 - z*z/6.0 + z**4/120.0)
+            s2 = dt * (z/2.0 - z**3/24.0 + z**5/720.0)
+        else:
+            s1 = np.sin(wdt) / omega
+            s2 = (1.0 - np.cos(wdt)) / omega
+
+        c = np.cos(wdt)
+        s = np.sin(wdt)
+
+        F = np.array([
+            [1.0, 0.0,      s1,         s2],
+            [0.0, 1.0,     -s2,         s1],
+            [0.0, 0.0,       c,        -s ],
+            [0.0, 0.0,       s,         c ]
+        ])
+        return F
     
     @staticmethod
     def extract_measurement(x):

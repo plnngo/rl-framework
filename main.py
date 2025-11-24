@@ -1,6 +1,9 @@
 import copy
+import random
 from stable_baselines3 import DQN, PPO
-from LSBatchFilter import estimate_all_targets_from_tracks
+from stable_baselines3.common.vec_env import DummyVecEnv
+from LSBatchFilter import estimate_all_targets_from_tracks, plot_errors_and_sigmas, process_estimates
+from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
 import numpy as np
 import matplotlib.pyplot as plt
@@ -35,21 +38,6 @@ def visualize_initial_positions(env):
             linewidth=0.5,
         )
         ax.add_patch(rect)
-
-    """ # --- Draw reward window ---
-    rw_half = env.reward_window_size / 2.0
-    rw_center = env.reward_window_center
-    reward_rect = Rectangle(
-        (rw_center[0] - rw_half, rw_center[1] - rw_half),
-        env.reward_window_size,
-        env.reward_window_size,
-        edgecolor="magenta",
-        facecolor="none",
-        linestyle="-",
-        linewidth=2,
-        label="Reward Window"
-    )
-    ax.add_patch(reward_rect) """
 
     # Known targets (blue)
     for tgt in env.targets:
@@ -573,7 +561,7 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False):
 
     return rewards, exceedFOV, last_env, last_episode_log
 
-def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False):
+def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False, seed=None):
     """
     Evaluates an RL agent or random policy on the given environment,
     tracking episode rewards and detection counts.
@@ -593,15 +581,15 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False):
         detections: list of detection counts per episode
     """
     rewards = []
-    detections = []
-    detection_count = 0
     detect_count3 = 0
+    detection_count = []
+
 
     for ep in trange(n_episodes, desc="Evaluating"):
-        obs, _ = env.reset()
+        detections = 5
+        obs, _ = env.reset(seed=int(np.random.choice(seeds)))
         done = False
         total_reward = 0.0
-        detect_count2 = 0
 
         # Initialize previous mask to track detection changes
         prev_mask = env.get_action_mask().copy()
@@ -614,20 +602,22 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False):
 
             obs, reward, done, truncated, info = env.step(action)
             total_reward += reward
-
             # Compare action mask with previous one to detect new trackable targets
-            if reward>9:
-                detect_count3 = detect_count3 + 1
-            curr_mask = info["action_mask"]
+            known_targets = sum(info["action_mask"]["micro_track"])
+            if known_targets>detections:
+                detect_count3 = detect_count3 + (known_targets - detections)
+                detections = known_targets
+            """ if reward>9:
+                detect_count3 = detect_count3 + 1 """
             # Count newly enabled tracking actions (assuming they correspond to detections)
-            new_detections = np.sum((curr_mask == 1) & (prev_mask == 0))
+            """ new_detections = np.sum((curr_mask == 1) & (prev_mask == 0))
             detection_count += int(new_detections)
-            prev_mask = curr_mask.copy()
+            prev_mask = curr_mask.copy() """
 
         rewards.append(total_reward)
-        detections.append(detect_count2)
+        detection_count.append(detections)
 
-    return rewards, detections, detect_count3
+    return rewards, detection_count, detect_count3
 
 
 def plot_violin(results_dict, ylabel="Episode Reward"):
@@ -864,12 +854,24 @@ def plot_means_lost_targets(ppo, dqn, random):
     # Plot
     labels = ["PPO", "DQN", "Random"]
     x = np.arange(len(labels))
+    colors = ["blue", "orange", "green"]
 
     plt.figure(figsize=(6, 4))
-    plt.bar(x, means, yerr=sem, capsize=8)
+    bars = plt.bar(x, means, yerr=sem, capsize=8, color=colors)
+
+    # Add bar-height labels
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(
+            bar.get_x() + bar.get_width() / 2,   # x position (center of bar)
+            height,                              # y position (top of bar)
+            f"{height:.2f}",                     # label text
+            ha='center', va='bottom'
+        )
+
     plt.xticks(x, labels)
-    plt.ylabel("Mean Subarray Length")
-    plt.title("Mean Length of Subarrays with SEM Uncertainty")
+    plt.ylabel("Mean Target Lost")
+    plt.title("Mean target lost across all agents")
 
     plt.tight_layout()
     plt.show()
@@ -1066,22 +1068,26 @@ if __name__ == "__main__":
     # Visualize trained agent
     visualize_trained_agent(env, model, n_steps=30) """
     
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="track")
-    n_episodes = 2
+    seeds = [42, 123, 321]
+
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
+    n_episodes = 100
 
     # ****** Search ******
-    """ # ****** Random policy ******
-    random_rewards, random_detections, detect_count2random = evaluate_agent_search(env, n_episodes=n_episodes, random_policy=True)
+    # ****** Random policy ******
+    random_rewards, random_detections, detect_count2random = evaluate_agent_search(env, n_episodes=n_episodes, random_policy=True, seed=seeds)
     print(detect_count2random)
 
     # ****** PPO agent ******
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
     ppo_model = PPO.load("agents/ppo_search_trained", env=env)
-    ppo_rewards, ppo_detections, detect_count2ppo = evaluate_agent_search(env, model=ppo_model, n_episodes=n_episodes)
+    ppo_rewards, ppo_detections, detect_count2ppo = evaluate_agent_search(env, model=ppo_model, n_episodes=n_episodes, seed=seeds)
     print(detect_count2ppo)
 
     # ****** DQN agent ******
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
     dqn_model = DQN.load("agents/dqn_search_trained", env=env)
-    dqn_rewards, dqn_detections, detect_count2dqn = evaluate_agent_search(env, model=dqn_model, n_episodes=n_episodes)
+    dqn_rewards, dqn_detections, detect_count2dqn = evaluate_agent_search(env, model=dqn_model, n_episodes=n_episodes, seed=seeds)
     print(detect_count2dqn)
 
     # ****** Plot reward distributions ******
@@ -1106,22 +1112,70 @@ if __name__ == "__main__":
         "PPO": detect_count2ppo,
         "DQN": detect_count2dqn
     }
-    plot_detection_bar_chart(detection_results) """
+    plot_detection_bar_chart(detection_results)
 
-    # ****** Track ******
+    """ # ****** Track ******
     # ****** Random policy ******
     random_rewards, exceedFOV_random, last_env, last_episode_log = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=True)
     print(exceedFOV_random)
+    visualize_initial_positions(last_env)
+    print(last_env.motion_model)
+    tracks = extract_tracks_from_log(last_episode_log)
+    estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
-    """ # ****** PPO agent ******
+    truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
+        process_estimates(tracks, estimates, last_env)
+    
+    for i in range(last_env.n_targets):
+        plot_errors_and_sigmas(
+            errors_by_tgt[i],
+            sigma_by_tgt[i],
+            t=t_by_tgt[i],          
+            target_id=i
+        )
+ 
+
+    # ****** PPO agent ******
     ppo_model = PPO.load("agents/ppo_track_trained", env=env)
     ppo_rewards, exceedFOV_ppo, last_env, last_episode_log = evaluate_agent_track(env, model=ppo_model, n_episodes=n_episodes)
     print(exceedFOV_ppo)
+    visualize_initial_positions(last_env)
+    print(last_env.motion_model)
+    tracks = extract_tracks_from_log(last_episode_log)
+    estimates = estimate_all_targets_from_tracks(tracks, last_env)
+
+    truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
+        process_estimates(tracks, estimates, last_env)
+    
+    for i in range(last_env.n_targets):
+        plot_errors_and_sigmas(
+            errors_by_tgt[i],
+            sigma_by_tgt[i],
+            t=t_by_tgt[i],          
+            target_id=i
+        )
+ 
 
     # ****** DQN agent ******
     dqn_model = DQN.load("agents/dqn_track_trained", env=env)
     dqn_rewards, exceedFOV_dqn, last_env, last_episode_log = evaluate_agent_track(env, model=dqn_model, n_episodes=n_episodes)
     print(exceedFOV_dqn)
+    visualize_initial_positions(last_env)
+    print(last_env.motion_model)
+    tracks = extract_tracks_from_log(last_episode_log)
+    estimates = estimate_all_targets_from_tracks(tracks, last_env)
+
+    truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
+        process_estimates(tracks, estimates, last_env)
+    
+    for i in range(last_env.n_targets):
+        plot_errors_and_sigmas(
+            errors_by_tgt[i],
+            sigma_by_tgt[i],
+            t=t_by_tgt[i],          
+            target_id=i
+        )
+ 
 
     # ****** Plot reward distributions ******
     reward_results = {
@@ -1133,20 +1187,5 @@ if __name__ == "__main__":
 
     plot_means_lost_targets(exceedFOV_ppo, exceedFOV_dqn, exceedFOV_random) """
 
-    #visualize_initial_positions(last_env)
-    print(last_env.motion_model)
-    tracks = extract_tracks_from_log(last_episode_log)
-    estimates = estimate_all_targets_from_tracks(tracks)
-
-    #Print real motion models
  
-
-       
-
-    # ****** Generate truth data ******
-    #truthData = propagate_known_targets_over_episode(last_env)
-
-    # Compute state differences
-    #diffs = compute_state_differences_with_ekf(truthData, last_episode_log, last_env, )
-    
 
