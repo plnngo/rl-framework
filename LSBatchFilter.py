@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.integrate import solve_ivp
@@ -7,22 +8,23 @@ from multi_target_env import MultiTargetEnv
 # ----------------------
 # Continuous-time dynamics and Jacobians
 # ----------------------
+@staticmethod
 def f_cv_cont(x):
     # state: [px,py,vx,vy]
     px, py, vx, vy = x
     return np.array([vx, vy, 0.0, 0.0])
-
+@staticmethod
 def Fx_cv_cont(x):
     Fx = np.zeros((4,4))
     Fx[0,2] = 1.0
     Fx[1,3] = 1.0
     return Fx
-
+@staticmethod
 def f_ct_no_heading_cont(x):
     # state: [px,py,vx,vy,omega]
     px, py, vx, vy, omega = x
     return np.array([vx, vy, -omega * vy, omega * vx, 0.0])
-
+@staticmethod
 def Fx_ct_no_heading_cont(x):
     px, py, vx, vy, omega = x
     Fx = np.zeros((5,5))
@@ -34,39 +36,52 @@ def Fx_ct_no_heading_cont(x):
     Fx[3,4] = vx
     return Fx
 
-# ----------------------
-# Integrate state + STM
-# ----------------------
-def _dynamics_with_stm(t, z, f_dyn, Fx_dyn, n):
-    x = z[:n]
-    Phi_vec = z[n:]
-    Phi = Phi_vec.reshape((n,n))
-    dx = f_dyn(x)
-    Fx = Fx_dyn(x)
-    dPhi = Fx @ Phi
-    return np.concatenate([dx, dPhi.reshape(-1)])
+# -----------------------------------------------------------
+# Helper: propagate (state + STM) using solve_ivp
+# -----------------------------------------------------------
+def propagate_state_and_stm(t0, t1, x0, Phi0_vec, f_dyn, Fx_dyn, n,
+                            rtol=1e-6, atol=1e-8):
+
+    def dyn_with_stm(t, z):
+        x = z[:n]
+        Phi = z[n:].reshape((n, n))
+        dx = f_dyn(x)
+        Fx = Fx_dyn(x)
+        dPhi = Fx @ Phi
+        return np.concatenate([dx, dPhi.reshape(-1)])
+
+    z0 = np.concatenate([x0, Phi0_vec])
+    sol = solve_ivp(dyn_with_stm, (t0, t1), z0,
+                    rtol=rtol, atol=atol, dense_output=False)
+
+    if not sol.success:
+        raise RuntimeError("STM/state propagation failed.")
+
+    z_end = sol.y[:, -1]
+    return z_end[:n], z_end[n:].reshape((n, n))
 
 # ----------------------
 # Batch estimator for one target (Batch LS)
 # ----------------------
 def batch_estimate_single_target(
-    t_obs,
-    y_obs,
+    t_obs, y_obs,
     x0_ref,
     P0,
     R,
-    model="CV",
-    max_iters=20,
-    tol=3e-5,
-    rtol_ivp=1e-6,
-    atol_ivp=1e-8,
-    lambda_init=1e-3,
-    lambda_factor=10.0
+    model,
+    f_cv_cont=f_cv_cont, Fx_cv_cont=Fx_cv_cont,
+    f_ct_no_heading_cont=f_ct_no_heading_cont, Fx_ct_no_heading_cont=Fx_ct_no_heading_cont,
+    rtol=1e-6,
+    atol=1e-8,
 ):
     """
-    Batch estimator (Levenberg-Marquardt) for one target.
+    Batch estimator, with CV/CT selection.
+
+    model: "CV" or "CT"
+    f_dyn / Fx_dyn chosen accordingly
     """
-    # Select dynamics
+
+    # --- choose model specifics ---
     if model.upper() == "CV":
         n = 4
         f_dyn = lambda x: f_cv_cont(x)
@@ -76,129 +91,108 @@ def batch_estimate_single_target(
         f_dyn = lambda x: f_ct_no_heading_cont(x)
         Fx_dyn = lambda x: Fx_ct_no_heading_cont(x)
     else:
-        raise ValueError("Unknown model: 'CV' or 'CT'")
+        raise ValueError("Unknown model: choose 'CV' or 'CT'")
 
+    # Standard batch extraction
+    t_obs = np.asarray(t_obs)
+    y_obs = np.asarray(y_obs)
     L = len(t_obs)
-    if L == 0:
-        return None
 
-    Xref_mat = np.zeros((n, L))
-    P_mat = np.zeros((n, n, L))
+    Xref = np.zeros((n, L))
     resids = np.zeros((2, L))
 
-    t_obs = np.asarray(t_obs, dtype=float)
-    y_obs = np.asarray(y_obs, dtype=float)
+    # Build batch matrices
+    Cinv = np.linalg.inv(P0)
+    Rinv = np.linalg.inv(R)
 
-    Po_bar = np.asarray(P0).copy()
-    invPo_bar = np.linalg.inv(Po_bar)
+    Lambda = Cinv.copy()
+    Nvec = np.zeros(n)
 
-    x0_ref = np.asarray(x0_ref).copy()
-    xo_bar = np.zeros(n)
+    # initial STM & state
+    Phi = np.eye(n)
+    x = x0_ref.copy()
 
-    lambda_lm = lambda_init
+    Xref[:, 0] = x
 
-    for itr in range(max_iters):
-        print(itr)
-        Lambda = invPo_bar.copy()
-        N = invPo_bar @ xo_bar
-        Xref = x0_ref.copy()
-        Phi = np.eye(n).reshape(-1)
-        total_res_norm = 0.0
-
-        for k in range(L):
-            if k > 0:
-                t_span = (t_obs[k-1], t_obs[k])
-                z0 = np.concatenate([Xref, Phi])
-                sol = solve_ivp(lambda tt, zz: _dynamics_with_stm(tt, zz, f_dyn, Fx_dyn, n),
-                                t_span, z0, rtol=rtol_ivp, atol=atol_ivp)
-                z_end = sol.y[:, -1]
-                Xref = z_end[:n]
-                Phi = z_end[n:]
-
-            Phi_mat = Phi.reshape((n, n))
-            Xref_mat[:, k] = Xref
-            P_mat[:, :, k] = Phi_mat @ Po_bar @ Phi_mat.T
-
-            if n == 4:
-                theta, r, Htil = MultiTargetEnv.extract_measurement(Xref[:4])
-            else:
-                theta, r, Htil4 = MultiTargetEnv.extract_measurement(Xref[:4])
-                Htil = np.zeros((2, 5))
-                Htil[:, :4] = Htil4
-
-            Gk = np.array([theta, r])
-            yk = y_obs[k] - Gk
-            resids[:, k] = yk
-            total_res_norm += np.linalg.norm(yk)
-
-            Hk = Htil @ Phi_mat
-            Lambda += Hk.T @ np.linalg.inv(R) @ Hk
-            N += Hk.T @ np.linalg.inv(R) @ yk
-
-        # Apply LM damping
-        Lambda_damped = Lambda + lambda_lm * np.eye(n)
-        try:
-            Lchol = np.linalg.cholesky(Lambda_damped)
-            Lchol_inv = np.linalg.inv(Lchol)
-            Po = Lchol_inv @ Lchol_inv.T
-        except np.linalg.LinAlgError:
-            Po = np.linalg.pinv(Lambda_damped)
-
-        xo_hat = Po @ N
-        xo_norm = np.linalg.norm(xo_hat)
-
-        # Step clipping
-        max_step = 1.0
-        if xo_norm > max_step:
-            xo_hat = xo_hat / xo_norm * max_step
-
-        # Update reference
-        x0_ref_new = x0_ref + xo_hat
-
-        # Forward simulate new residuals to check if LM reduces cost
-        # (Optional, can skip for speed)
-        # if total_res_norm_new < total_res_norm: decrease lambda, else increase
-        # Here we just adapt lambda heuristically
-        if xo_norm < tol:
-            print(f"Converged at iteration {itr}, xo_norm={xo_norm:.3e}")
-            x0_ref = x0_ref_new
-            break
-
-        # Update LM damping heuristically
-        lambda_lm *= 0.7 if xo_norm < 2*tol else lambda_factor
-
-        x0_ref = x0_ref_new
-        xo_bar = xo_bar - xo_hat
-
-    # Final forward pass to compute consistent outputs
-    Xref = x0_ref.copy()
-    Phi = np.eye(n).reshape(-1)
+    # -----------------------------------------------------------
+    # FORWARD PASS (reference traj) and build Λ and N
+    # -----------------------------------------------------------
     for k in range(L):
+
         if k > 0:
-            t_span = (t_obs[k-1], t_obs[k])
-            z0 = np.concatenate([Xref, Phi])
-            sol = solve_ivp(lambda tt, zz: _dynamics_with_stm(tt, zz, f_dyn, Fx_dyn, n),
-                            t_span, z0, rtol=rtol_ivp, atol=atol_ivp)
-            z_end = sol.y[:, -1]
-            Xref = z_end[:n]
-            Phi = z_end[n:]
-        Phi_mat = Phi.reshape((n,n))
-        Xref_mat[:, k] = Xref
-        P_mat[:, :, k] = Phi_mat @ Po_bar @ Phi_mat.T
-        if n == 4:
-            theta, r, _ = MultiTargetEnv.extract_measurement(Xref[:4])
-        else:
-            theta, r, _ = MultiTargetEnv.extract_measurement(Xref[:4])
-        resids[:, k] = y_obs[k] - np.array([theta, r])
+            x, Phi = propagate_state_and_stm(
+                t_obs[k - 1], t_obs[k],
+                x, Phi.reshape(-1),
+                f_dyn, Fx_dyn, n,
+                rtol, atol
+            )
+
+        Xref[:, k] = x
+
+        # measurement model
+        theta, rr, Htil = MultiTargetEnv.extract_measurement(x)
+        if model.upper() == "CT":
+            Htil = np.hstack([Htil, np.zeros((2, 1))])
+        yk = y_obs[k] - np.array([theta, rr])
+        resids[:, k] = yk
+
+        # measurement Jacobian wrt initial state
+        Hk = Htil @ Phi
+
+        # batch accumulation
+        Lambda += Hk.T @ Rinv @ Hk
+        Nvec += Hk.T @ Rinv @ yk
+
+    # -----------------------------------------------------------
+    # Solve normal equations Λ x = N
+    # -----------------------------------------------------------
+    try:
+        x0_correction = np.linalg.solve(Lambda, Nvec)
+    except np.linalg.LinAlgError:
+        x0_correction = np.linalg.pinv(Lambda) @ Nvec
+
+    x0_new = x0_ref + x0_correction
+
+    # posterior covariance of initial state
+    try:
+        P0_post = np.linalg.inv(Lambda)
+    except np.linalg.LinAlgError:
+        P0_post = np.linalg.pinv(Lambda)
+
+    # -----------------------------------------------------------
+    # FINAL forward propagation using corrected initial state
+    # -----------------------------------------------------------
+    Xest = np.zeros((n, L))
+    P_mat = np.zeros((n, n, L))
+
+    Phi = np.eye(n)
+    x = x0_new.copy()
+
+    Xest[:, 0] = x
+    P_mat[:, :, 0] = P0_post
+
+    for k in range(1, L):
+        x, Phi = propagate_state_and_stm(
+            t_obs[k - 1], t_obs[k],
+            x, Phi.reshape(-1),
+            f_dyn, Fx_dyn, n,
+            rtol, atol
+        )
+        Xest[:, k] = x
+        P_mat[:, :, k] = Phi @ P0_post @ Phi.T
 
     return {
-        "Xref_mat": Xref_mat,
+        "model": model,
+        "x0_new": x0_new,
+        "P0_post": P0_post,
+        "Xref": Xref,
+        "Xest": Xest,
         "P_mat": P_mat,
         "resids": resids,
-        "x0_ref": x0_ref,
-        "P0": Po_bar,
-        "model": model
+        "Lambda": Lambda,
+        "Nvec": Nvec
     }
+
 # Residuals for CV: params = [px0, py0, vx0, vy0]
 def residuals_cv(params, t_obs, y_obs, R_sqrt_inv=None):
     x0 = np.asarray(params)
@@ -360,15 +354,15 @@ def fit_initial_state_ct(t_obs, y_obs, R=None, x0_guess=None, bounds=None, verbo
 # ----------------------
 # Wrapper to estimate all targets from tracks
 # ----------------------
-def estimate_all_targets_from_tracks(tracks, R=None, **batch_kwargs):
+def estimate_all_targets_from_tracks(tracks, env, R=None, **batch_kwargs):
     """
     tracks: output of extract_tracks_from_log
     R: measurement noise matrix
     """
 
     if R is None:
-        sigma_theta = np.deg2rad(1.0)
-        sigma_range = 0.1
+        sigma_theta = np.deg2rad(1/3600)       # 1arcsec
+        sigma_range = 0.0001
         R = np.diag([sigma_theta**2, sigma_range**2])
 
     estimates = {}
@@ -377,16 +371,28 @@ def estimate_all_targets_from_tracks(tracks, R=None, **batch_kwargs):
 
         # --- Extract data from track ---
         timesteps = [obs["t"] for obs in track]
-        states = [obs["state"] for obs in track]
+        #states = [obs["state"] for obs in track]
+
+        # Skip this target if there are no timesteps/measurements
+        if not timesteps:   # or: if len(timesteps) == 0:
+            continue
+
+        # --- Generate truth states ---
+        truth_states = generate_truth_states(timesteps, tgt_id, env)
 
         if len(timesteps) == 0:
             continue
 
         # --- Convert ground-truth states → measurements ---
         y_obs = []
-        for x in states:
+        for x in truth_states:
             th, rr, _ = MultiTargetEnv.extract_measurement(x)
-            y_obs.append([th, rr])
+            y_true = np.array([th, rr])
+            # Add measurement noise from R
+            noise = np.random.multivariate_normal(mean=np.zeros(2), cov=R)
+            y_noisy = y_true + noise
+
+            y_obs.append(y_noisy)
         y_obs = np.array(y_obs)
 
         # --------------------------------------------
@@ -404,13 +410,15 @@ def estimate_all_targets_from_tracks(tracks, R=None, **batch_kwargs):
         # --------------------------------------------
         # 3) Pick best model
         # --------------------------------------------
-        if cost_cv < cost_ct:
+        if env.motion_model[tgt_id] == "L": #if (cost_cv < cost_ct) or (abs(x0_ct[4]) < 1e-10):      # assume linear motion if turn rate is too small
             chosen_model = "CV"
-            x0_ref = x0_cv
+            x0_ref = truth_states[0]
             best_cost = cost_cv
         else:
             chosen_model = "CT"
-            x0_ref = x0_ct
+            #x0_ref = x0_ct
+            x0_ref = truth_states[0]
+            #x0_ref = np.append(x0_ref, env.motion_params[tgt_id])
             best_cost = cost_ct
 
         print(f"Target {tgt_id}: chosen {chosen_model} with cost {best_cost}")
@@ -419,7 +427,8 @@ def estimate_all_targets_from_tracks(tracks, R=None, **batch_kwargs):
         # 4) Build matching P0 (dimension = len(x0_ref))
         # --------------------------------------------
         dim = len(x0_ref)
-        P0 = np.eye(dim) * 1e3    # adjustable
+        P0 = np.eye(dim) * 0.05
+        P0[:2, :2] = np.eye(2) * 0.1
 
         # --------------------------------------------
         # 5) Run batch estimator with chosen model
@@ -437,3 +446,148 @@ def estimate_all_targets_from_tracks(tracks, R=None, **batch_kwargs):
         estimates[tgt_id] = out
 
     return estimates
+
+def generate_truth_states(t_vec, tgt_id, env):
+    """
+    Generate continuous-time truth trajectory for a given target.
+    Returns truth_states with shape (T, n).
+    """
+
+    # State dimension
+    n = env.targets[tgt_id]["x"].shape[0]
+    if env.motion_model[tgt_id] == "T":
+        n = 5
+    else:
+        n = 4
+
+    # Allocate output
+    truth_states = np.zeros((len(t_vec), n))
+
+    # Initial state at t=0
+    x0 = env.targets[tgt_id]["x"].copy()
+    if env.motion_model[tgt_id] == "T":     # CT model has ω (turn rate)
+        x0 = np.append(x0, env.motion_params[tgt_id])
+
+    Phi0 = np.eye(n).reshape(-1)
+
+    # --- Propagate from t=0 → t_vec[0] ---
+    t_first = t_vec[0]
+    if t_first > 0:
+        if env.motion_model[tgt_id] == "T":
+            x0, _ = propagate_state_and_stm(
+                0.0, t_first, x0, Phi0,
+                f_ct_no_heading_cont, Fx_ct_no_heading_cont, n
+            )
+        else:
+            x0, _ = propagate_state_and_stm(
+                0.0, t_first, x0, Phi0,
+                f_cv_cont, Fx_cv_cont, n
+            )
+
+    # Store initial propagated truth
+    truth_states[0] = x0
+
+    # --- Propagate through all times ---
+    for k in range(len(t_vec)-1):
+        t0 = t_vec[k]
+        t1 = t_vec[k+1]
+
+        if env.motion_model[tgt_id] == "T":
+            x_next, _ = propagate_state_and_stm(
+                t0, t1, x0, Phi0,
+                f_ct_no_heading_cont, Fx_ct_no_heading_cont, n
+            )
+        else:
+            x_next, _ = propagate_state_and_stm(
+                t0, t1, x0, Phi0,
+                f_cv_cont, Fx_cv_cont, n
+            )
+
+        truth_states[k+1] = x_next
+        x0 = x_next
+
+    return truth_states
+
+# -------------------------------------------------------------------------
+# 1. Extract states, covariances, and compute errors + sigma bounds
+# -------------------------------------------------------------------------
+def process_estimates(tracks, estimates, env):
+    """
+    tracks: output of extract_tracks_from_log
+    estimates: output of estimate_all_targets_from_tracks
+
+    Returns:
+        truth_by_target[tgt_id] → array [T, 4 or 5]
+        est_by_target[tgt_id]   → array [T, 4 or 5]
+        cov_by_target[tgt_id]   → array [T, dim, dim]
+        errors_by_target[tgt_id] → array [T, dim]
+        sigma_by_target[tgt_id]  → array [T, dim]
+    """
+
+    truth_by_target = {}
+    est_by_target = {}
+    cov_by_target = {}
+    errors_by_target = {}
+    sigma_by_target = {}
+    t_by_target = {}
+
+    for tgt_id, track in tracks.items():
+
+        # Extract timestamps
+        t_vec = np.array([entry["t"] for entry in track])
+
+        # --- Generate truth states ---
+        truth_states = generate_truth_states(t_vec, tgt_id, env)
+        truth_by_target[tgt_id] = truth_states
+
+        # --- Extract estimates ---
+        est_states = np.array(estimates[tgt_id]["Xest"]).T   # shape (T, n)
+        est_covs   = np.array(estimates[tgt_id]["P_mat"])
+
+        # If covariances are stored as (n, n, T), reorder to (T, n, n)
+        if est_covs.ndim == 3 and est_covs.shape[2] == len(t_vec):
+            est_covs = np.transpose(est_covs, (2, 0, 1))
+
+        est_by_target[tgt_id] = est_states
+        cov_by_target[tgt_id] = est_covs
+
+        # --- Compute errors & sigma bounds ---
+        errors = est_states - truth_states             # (T, n)
+        sigma  = np.sqrt(np.array([np.diag(P) for P in est_covs]))
+
+        errors_by_target[tgt_id] = errors
+        sigma_by_target[tgt_id] = sigma
+        t_by_target[tgt_id] = t_vec
+
+    return (
+        truth_by_target,
+        est_by_target,
+        cov_by_target,
+        errors_by_target,
+        sigma_by_target,
+        t_by_target,
+    )
+# -------------------------------------------------------------------------
+# 2. Plot error trajectories + ±3σ envelopes
+# -------------------------------------------------------------------------
+def plot_errors_and_sigmas(errors, sigmas, t, target_id):
+    """
+    errors_by_target: dict[tgt_id] -> [T, dim]
+    sigma_by_target: dict[tgt_id] -> [T, dim]
+    """
+
+    labels = ["x", "y", "xdot", "ydot"]
+    fig, axs = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
+
+    for i in range(4):
+        axs[i].scatter(t, errors[:, i], label="error")
+        axs[i].plot(t, 3*sigmas[:, i], linestyle="--", label="+3σ")
+        axs[i].plot(t, -3*sigmas[:, i], linestyle="--", label="-3σ")
+        axs[i].set_ylabel(labels[i])
+        axs[i].grid(True)
+
+    axs[-1].set_xlabel("time")
+    fig.suptitle(f"Target {target_id}: Errors and 3σ Bounds")
+    axs[0].legend()
+    plt.tight_layout()
+    plt.show()
