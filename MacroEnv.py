@@ -21,7 +21,7 @@ class MacroEnv(gym.Env):
     """
 
     def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0,
-                 d_state=4, fov_size=2.0, max_steps=300,
+                 d_state=4, fov_size=4.0, max_steps=300,
                  search_agent=None, track_agent=None):
         super().__init__()
 
@@ -48,6 +48,8 @@ class MacroEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(2)  # 0=search, 1=track
         self.observation_space = self.base_env.observation_space
         self.fov_size = fov_size
+        self.init_n_targets = n_targets
+        self.init_n_unknown_targets = n_unknown_targets
 
         # --------------------
         # Micro environments (created internally)
@@ -170,6 +172,8 @@ class MacroEnv(gym.Env):
         # --- Core target and environment state ---
         dest_env.targets = [copy.deepcopy(t) for t in source_env.targets]
         dest_env.unknown_targets = [copy.deepcopy(t) for t in source_env.unknown_targets]
+        dest_env.n_targets = source_env.n_targets
+        dest_env.n_unknown_targets = source_env.n_unknown_targets
 
         # --- Tracking-related state ---
         dest_env.known_mask = np.copy(source_env.known_mask)

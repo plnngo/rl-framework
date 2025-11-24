@@ -586,13 +586,10 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False, 
 
 
     for ep in trange(n_episodes, desc="Evaluating"):
-        detections = 5
+        detections = env.init_n_target
         obs, _ = env.reset(seed=int(np.random.choice(seeds)))
         done = False
         total_reward = 0.0
-
-        # Initialize previous mask to track detection changes
-        prev_mask = env.get_action_mask().copy()
 
         while not done:
             if random_policy:
@@ -607,12 +604,6 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False, 
             if known_targets>detections:
                 detect_count3 = detect_count3 + (known_targets - detections)
                 detections = known_targets
-            """ if reward>9:
-                detect_count3 = detect_count3 + 1 """
-            # Count newly enabled tracking actions (assuming they correspond to detections)
-            """ new_detections = np.sum((curr_mask == 1) & (prev_mask == 0))
-            detection_count += int(new_detections)
-            prev_mask = curr_mask.copy() """
 
         rewards.append(total_reward)
         detection_count.append(detections)

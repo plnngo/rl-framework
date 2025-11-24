@@ -35,36 +35,37 @@ class MacroRandomSeedEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, seed_list, n_targets=5, n_unknown_targets=100, fov_size=2.0):
+    def __init__(self, seed_list, n_targets=5, n_unknown_targets=100, fov_size=4.0):
         super().__init__()
 
         self.seed_list = seed_list
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
         self.fov_size = fov_size
+        self.init_n_target = n_targets
+        self.init_n_unknown_target = n_unknown_targets
 
         # Build initial env to expose observation and action space
-        self.env = self._make_env(np.random.choice(seed_list))
+        self.env = self._make_env(self.n_targets, self.n_unknown_targets, np.random.choice(seed_list))
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
 
     # Build a MacroEnv for a given seed
-    def _make_env(self, seed):
+    def _make_env(n_targets, n_unknown_targets, seed):
         env_search = MultiTargetEnv(
-            n_targets=self.n_targets, n_unknown_targets=self.n_unknown_targets,
+            n_targets=n_targets, n_unknown_targets=n_unknown_targets,
             seed=seed, mode="search"
         )
         env_track = MultiTargetEnv(
-            n_targets=self.n_targets, n_unknown_targets=self.n_unknown_targets,
+            n_targets=n_targets, n_unknown_targets=n_unknown_targets,
             seed=seed, mode="track"
         )
         search_agent = PPO.load("agents/ppo_search_trained", env=env_search)
         track_agent = PPO.load("agents/ppo_track_trained", env=env_track)
 
         return MacroEnv(
-            n_targets=self.n_targets,
-            n_unknown_targets=self.n_unknown_targets,
-            fov_size=self.fov_size,
+            n_targets=n_targets,
+            n_unknown_targets=n_unknown_targets,
             search_agent=search_agent,
             track_agent=track_agent,
         )
