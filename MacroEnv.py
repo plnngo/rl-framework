@@ -5,13 +5,23 @@ import copy
 
 from multi_target_env import MultiTargetEnv
 
+def unwrap_env(env):
+        # Monitor wrapper
+        if hasattr(env, "env"):
+            return unwrap_env(env.env)
+        # VecEnv wrapper (DummyVecEnv, SubprocVecEnv)
+        if hasattr(env, "venv"):
+            return unwrap_env(env.venv)
+        # Done, real env
+        return env
+
 class MacroEnv(gym.Env):
     """
     Hierarchical Macro Environment for Search-Track switching.
     """
 
-    def __init__(self, n_targets=5, n_unknown_targets=3, space_size=100.0,
-                 d_state=4, fov_size=2.0, max_steps=20,
+    def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0,
+                 d_state=4, fov_size=2.0, max_steps=300,
                  search_agent=None, track_agent=None):
         super().__init__()
 
@@ -42,57 +52,56 @@ class MacroEnv(gym.Env):
         # --------------------
         # Micro environments (created internally)
         # --------------------
-        self.search_env = MultiTargetEnv(n_targets=n_targets,
-                                         n_unknown_targets=n_unknown_targets,
-                                         space_size=space_size,
-                                         d_state=d_state,
-                                         fov_size=fov_size,
-                                         max_steps=max_steps,
-                                         mode="search")
-
-        self.track_env = MultiTargetEnv(n_targets=n_targets,
-                                        n_unknown_targets=n_unknown_targets,
-                                        space_size=space_size,
-                                        d_state=d_state,
-                                        fov_size=fov_size,
-                                        max_steps=max_steps,
-                                        mode="track")
+        self.search_env = search_agent.get_env().envs[0]
+        self.track_env  = track_agent.get_env().envs[0]
 
     # ---------------------------------------------------------------------
     def reset(self, **kwargs):
         # Reset base environment first
         obs, info = self.base_env.reset(**kwargs)
 
+        real_search_env = unwrap_env(self.search_env)
+        real_track_env  = unwrap_env(self.track_env)
+
         # Sync micro environments to match base_env
-        self._sync_envs(self.base_env, self.search_env)
-        self._sync_envs(self.base_env, self.track_env)
+        self._sync_envs(self.base_env, real_search_env)
+        self._sync_envs(self.base_env, real_track_env)
 
         return obs, info
 
     # ---------------------------------------------------------------------
+
     def step(self, macro_action):
         """
         macro_action: 0=SEARCH, 1=TRACK
         Executes K micro steps with the selected micro agent.
         """
-        # sync all envs with the current world state
-        self._sync_envs(self.base_env, self.search_env)
-        self._sync_envs(self.base_env, self.track_env)
+        # unwrap both micro envs
+        real_search_env = unwrap_env(self.search_env)
+        real_track_env  = unwrap_env(self.track_env)
 
-        # select macro objective and call corresponding agent
+        # sync both with current world
+        self._sync_envs(self.base_env, real_search_env)
+        self._sync_envs(self.base_env, real_track_env)
+
+        # choose agent
         if macro_action == 0:
-            obs = self.search_env.obs
-            micro_action = self.search_agent.act(obs)
-            next_obs, _, done, truncated, info = self.search_env.step(micro_action)
-            macro_reward = self._compute_search_reward(next_obs)
-            self._sync_envs(self.search_env, self.base_env)
+            obs = real_search_env.obs
+            micro_action, _ = self.search_agent.predict(obs, deterministic=False)
+            next_obs, _, done, truncated, info = real_search_env.step(micro_action)
+            macro_reward = self._compute_search_reward(real_search_env)
+
+            # sync back into base env
+            self._sync_envs(real_search_env, self.base_env)
 
         else:
-            obs = self.track_env.obs
-            micro_action = self.track_agent.act(obs)
-            next_obs, _, done, truncated, info = self.track_env.step(micro_action)
-            macro_reward = self._compute_track_reward(obs)
-            self._sync_envs(self.track_env, self.base_env)
+            obs = real_track_env.obs
+            micro_action, _ = self.track_agent.predict(obs, deterministic=False)
+            next_obs, _, done, truncated, info = real_track_env.step(micro_action)
+            macro_reward = self._compute_track_reward(self.base_env)
+
+            # sync back into base env
+            self._sync_envs(real_track_env, self.base_env)
 
         return next_obs, macro_reward, done, truncated, info
 
@@ -113,7 +122,7 @@ class MacroEnv(gym.Env):
         return obs_flat.astype(np.float32)
 
     # ---------------------------------------------------------------------
-    def _compute_search_reward(self, env, pre_targets):
+    def _compute_search_reward(self, env):
         """
         Reward = 1 if all known targets' uncertainties fit inside FOV.
         """
@@ -165,6 +174,8 @@ class MacroEnv(gym.Env):
         # --- Tracking-related state ---
         dest_env.known_mask = np.copy(source_env.known_mask)
         dest_env.obs = np.copy(source_env.obs)
+        dest_env.motion_model = np.copy(source_env.motion_model)
+        dest_env.motion_params = np.copy(source_env.motion_params)
 
         # --- Search-related state ---
         dest_env.visit_counts = np.copy(source_env.visit_counts)
@@ -177,9 +188,5 @@ class MacroEnv(gym.Env):
         # --- Time step ---
         dest_env.step_count = source_env.step_count
 
-        # --- Reward window (if used in your reward logic) ---
-        dest_env.reward_window_center = np.copy(source_env.reward_window_center)
-        dest_env.reward_window_history = [np.copy(x) for x in source_env.reward_window_history]
-
         # --- Optional: RNG state, if you want identical stochasticity ---
-        dest_env.rng.bit_generator.state = copy.deepcopy(source_env.rng.bit_generator.state)
+        #dest_env.rng.bit_generator.state = copy.deepcopy(source_env.rng.bit_generator.state)
