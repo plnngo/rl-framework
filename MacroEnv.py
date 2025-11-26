@@ -133,7 +133,7 @@ class MacroEnv(gym.Env):
 
     def _compute_track_reward(self, env):
         """
-        Reward = 1 if any target's 3σ uncertainty ellipse exceeds 80% of FOV.
+        Reward = 1 if any target's 3sigma uncertainty ellipse exceeds 80% of FOV.
         """
         pre_in_fov_unc = self._uncertainty_within_fov(env, margin=0.8)
         needs_tracking = not all(pre_in_fov_unc)

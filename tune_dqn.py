@@ -10,7 +10,7 @@ from multi_target_env import MultiTargetEnv
 
 # --- ENV CREATION ------------------------------------------------------------
 
-def make_env(mode="search", n_targets=5, n_unknown_targets=100, seed=None):
+def make_env(mode="track", n_targets=5, n_unknown_targets=100, seed=None):
     """Utility function to create and return the environment."""
     # Always return the same setup for training and evaluation
     def _init():
