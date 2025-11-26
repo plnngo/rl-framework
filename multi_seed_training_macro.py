@@ -46,7 +46,7 @@ class MacroRandomSeedEnv(gym.Env):
         self.init_n_unknown_target = n_unknown_targets
 
         # Build initial env to expose observation and action space
-        self.env = self._make_env(self.n_targets, self.n_unknown_targets, np.random.choice(seed_list))
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, np.random.choice(seed_list))
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
 
@@ -72,7 +72,7 @@ class MacroRandomSeedEnv(gym.Env):
 
     def reset(self, **kwargs):
         seed = np.random.choice(self.seed_list)
-        self.env = self._make_env(seed)
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed)
         return self.env.reset(**kwargs)
 
     def step(self, action):
@@ -217,9 +217,9 @@ def main():
     train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # --- DQN ---
-    color_dqn = cm.get_cmap("tab10")(1)
+    """ color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir) """
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)
