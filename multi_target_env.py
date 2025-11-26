@@ -1,5 +1,7 @@
 import gymnasium as gym
 import numpy as np
+from math import sqrt
+from scipy.stats import norm
 from scipy.linalg import expm
 
 class MultiTargetEnv(gym.Env):
@@ -160,21 +162,10 @@ class MultiTargetEnv(gym.Env):
             micro = search_pos
         else:  # TRACK
             target_id = micro_track 
-            # Check validity
-            if not self.known_mask[target_id]:
-                # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
-                obs = self._get_obs()
-                self.step_count += 1
-                info = {"invalid_action": True, "action_mask": self.get_action_mask()}
-                return obs, -1.0, False, False, info
             micro = target_id
 
         # Initialise reward
         total_iG = 0.0
-
-        # Move reward window to the right with each step (same as target dynamics)
-        #self.reward_window_center[0] += self.reward_window_speed * self.dt
-        #self.reward_window_history.append(self.reward_window_center.copy())
 
         # generate measurement noise covariance (2x2)
         sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
@@ -182,6 +173,8 @@ class MultiTargetEnv(gym.Env):
 
         R = np.diag([sigma_theta**2, sigma_r**2])
 
+        # reward related to neglected known targets
+        prob_reward = 0.0
         # propagate all known targets
         for tgt in self.targets:
 
@@ -200,6 +193,12 @@ class MultiTargetEnv(gym.Env):
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
                 total_iG += iG
+            # Otherwise: compute FOV-probability reward for this neglected target
+            else:
+                prob_reward += compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+            
+        # Tracking reward
+        total_iG = prob_reward
 
         # propagate unknowns
         for utgt in self.unknown_targets:
@@ -211,17 +210,23 @@ class MultiTargetEnv(gym.Env):
             # retrieve predictions by propagating each unknown target
             utgt['x'], utgt['P'] = MultiTargetEnv.propagate_target_2D(utgt['x'], utgt['P'], utgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
 
-        # If TRACK macro, return here
+        # If TRACK macro, return here            
         if target_id is not None:       
-            
             # Construct next observation
             obs = self._get_obs()
+            self.step_count += 1
+
+            # Check validity
+            if not self.known_mask[target_id]:
+                # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
+                info = {"invalid_action": True, "action_mask": self.get_action_mask()}
+                return obs, -1.0, False, False, info
 
             # Simple reward = total information gain (KL)
-            reward = total_iG / 1e3   # scale down
+            #reward = total_iG / 1e3   # scale down
+            reward = total_iG
 
             # Termination
-            self.step_count += 1
             done = self.step_count >= self.max_steps
             truncated = False
 
@@ -301,7 +306,9 @@ class MultiTargetEnv(gym.Env):
         pos0 = np.array([x0_left, y0])
         vel0 = np.array([self.motion_params[target_id], 0.0])
         x0 = np.concatenate([pos0, vel0])
-        P0 = self.P0.copy()
+        covMultiplier = [5.0]
+        P0 = self.P0.copy() * np.random.choice(covMultiplier)
+
         Q = np.eye(self.d_state) * 0.
         return {"id": target_id, "x": x0, "P": P0, "Q": Q}
     
@@ -345,7 +352,8 @@ class MultiTargetEnv(gym.Env):
             obs.append(np.concatenate([tgt['x'], tgt['P'][np.tril_indices(self.d_state)]]))
         obs_vec = np.concatenate(obs)
         mask_vec = self.known_mask.astype(np.float32)
-        return np.concatenate([obs_vec, mask_vec])
+        output = np.concatenate([obs_vec, mask_vec])
+        return output
         
     def sample_track_action(self):
         """Sample a valid tracking action from currently known targets."""
@@ -360,8 +368,8 @@ class MultiTargetEnv(gym.Env):
         """Promote unknown_targets[unknown_idx] into known targets."""
         if len(self.targets) >= self.max_targets:
             return
-        new = self.unknown_targets.pop(unknown_idx)
-        new_id = len(self.targets)
+        new = self.unknown_targets.pop(unknown_idx-self.init_n_target)
+        new_id = unknown_idx
         new_target = {
             "id": new_id,
             "x": new['x'].copy(),
@@ -548,3 +556,25 @@ def compute_kl_divergence(mean_p, cov_p, mean_q, cov_q):
 def mahalanobis_distance(x, mean, cov):
     diff = x - mean
     return np.sqrt(diff.T @ np.linalg.inv(cov) @ diff)
+
+def compute_fov_prob_single(fov, x, P):
+    """
+    Compute FOV-retention probability reward for neglected targets.
+    """
+
+    half_fov = fov*0.75 / 2.0   # radians or degrees, consistent with measurement model
+    prob = 1.0
+    for i in range(2):
+        pos_var = P[i, i]
+        pos_std = sqrt(pos_var)
+
+        # Numerical safety
+        if pos_std < 1e-8:
+            pos_std = 1e-8
+
+        # --- 4. Probability that target's x-pos ∈ [-half_fov, +half_fov] ---
+        # Gaussian N(0, σ)
+        dist = norm(loc=0.0, scale=pos_std)
+        prob *= dist.cdf(half_fov) - dist.cdf(-half_fov)
+
+    return prob
