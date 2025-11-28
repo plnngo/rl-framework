@@ -53,26 +53,25 @@ def evaluate_agent_macro(env=None, model=None, n_episodes=100, random_policy=Fal
             if ep == n_episodes - 1:
                 episode_log[t] = {}
                 episode_task_log[t] = {"timestamp": t, "action": int(action)}
-
-            for tgt in range(env.base_env.n_targets):
-                #print(env.base_env.targets[tgt]["id"])
-                exceed, x, P = analyse_tracking_task(next_obs, env.base_env.targets[tgt]["id"], env.base_env, confidence=0.95)
-                if exceed and tgt not in exceed_target:
-                    exceed_target.append(tgt)
-
-                # if this is the last episode, store everything
-                if ep == n_episodes - 1 and tgt == info["target_id"]:
-                    episode_log[t][tgt] = {
-                        "id": tgt,
-                        "state": x.copy(),
-                        "cov": P.copy(),
-                        "exceedFOV": bool(exceed),
-                    }
+            if ep == n_episodes - 1:
+                for tgt in range(env.base_env.n_targets):
+                    #print(env.base_env.targets[tgt]["id"])
+                    exceed, x, P = analyse_tracking_task(next_obs, env.base_env.targets[tgt]["id"], env.base_env, confidence=0.95)
+                    """ if exceed and tgt not in exceed_target:
+                        exceed_target.append(tgt)
+    """
+                    # if this is the last episode, store everything
+                    if tgt == info["target_id"]:
+                        episode_log[t][tgt] = {
+                            "id": tgt,
+                            "state": x.copy(),
+                            "cov": P.copy()
+                        }
 
             t += 1  # increment timestep
         rewards.append(total_reward)
-        detection_count.append(detections)
-        exceedFOV.append(exceed_target)
+        detection_count.append(env.base_env.detect_counter)
+        exceedFOV.append(env.base_env.lost_counter)
         known.append(env.base_env.n_targets)
         # --- For last episode, store deep copy of env ---
         if ep == n_episodes - 1:
@@ -98,7 +97,7 @@ def plot_task_log(task_log, title="Action Timeline"):
 
 if __name__ == "__main__":
     seeds = [42, 123, 321]
-    n_episodes = 20
+    n_episodes = 1
     n_targets = 5
     n_unknown_targets =100
     envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
@@ -129,12 +128,12 @@ if __name__ == "__main__":
     plot_violin(detection_results, ylabel="Number of Detections")
 
     # ****** Plot total detection ******
-    detection_results = {
+    """ detection_results = {
         "Random": detect_count3Random,
         "PPO": detect_count3PPO,
         "DQN": detect_count3DQN
     }
-    plot_detection_bar_chart(detection_results)
+    plot_detection_bar_chart(detection_results) """
 
     # ****** Plot total target lost ******
     plot_means_lost_targets(exceedFOVPPO, knownPPO, exceedFOVDQN, knownDQN, exceedFOVRandom, knownRandom)
