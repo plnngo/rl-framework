@@ -16,8 +16,17 @@ class MultiTargetEnv(gym.Env):
         self.space_size = space_size
         self.d_state = d_state  # state dimension per target (e.g., x,y,vx,vy)
         self.max_steps = max_steps
-        self.dt = 1.0           
+        self.dt = 1.0          
+        self.threshold_fov = 0.5 
+        self.lost_counter = 0
+        self.detect_counter = 0
         self.rng = np.random.default_rng(seed)
+
+        # generate measurement noise covariance (2x2)
+        sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
+        sigma_r = 0.1        # 10 cm range noise
+
+        self.R = np.diag([sigma_theta**2, sigma_r**2])
 
         # Parameters related to dynamical motion
         self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
@@ -80,6 +89,8 @@ class MultiTargetEnv(gym.Env):
         self.step_count = 0
         self.n_targets = self.init_n_target
         self.n_unknown_targets = self.init_n_unknown_target
+        self.lost_counter = 0
+        self.detect_counter = 0
         self.targets = [self._init_target(i) for i in range(self.init_n_target)]
         self.unknown_targets = [
             self._init_unknown_target(i + self.init_n_target)
@@ -167,16 +178,31 @@ class MultiTargetEnv(gym.Env):
         # Initialise reward
         total_iG = 0.0
 
-        # generate measurement noise covariance (2x2)
-        sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
-        sigma_r = 0.1        # 10 cm range noise
-
-        R = np.diag([sigma_theta**2, sigma_r**2])
-
         # reward related to neglected known targets
+        lost_reward = 0.0
         prob_reward = 0.0
+        lost_targets = []
+
+        """ # --- Catastrophic failure: a target was lost ---
+        if self.n_targets < self.init_n_target:
+            obs = self._get_obs()
+            self.step_count += 1
+
+            reward = -10.0    # choose appropriate magnitude
+            done = True
+            truncated = False
+
+            info = {
+                "catastrophic_loss": True,
+                "remaining_targets": self.n_targets,
+                "action_mask": self.get_action_mask()
+            }
+
+            self.obs = obs
+            return obs, reward, done, truncated, info """
+
         # propagate all known targets
-        for tgt in self.targets:
+        for tgt in self.targets.copy():
 
             idx = tgt['id']  # global index
             model = self.motion_model[idx]
@@ -186,19 +212,23 @@ class MultiTargetEnv(gym.Env):
             tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
 
             # compute measurement related to action
-            if target_id is not None and tgt['id'] == target_id:
-                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], R)
+            if target_id is not None and idx == target_id:
+                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R)
                 iG = compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
-                total_iG += iG
+                total_iG = iG
+                #total_iG = 0
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
-                prob_reward += compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-            
-        # Tracking reward
-        total_iG = prob_reward
+                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                prob_reward += prob
+                if prob<self.threshold_fov:
+                    # target is considered as lost
+                    #lost_reward = lost_reward-1
+                    lost_targets.append(tgt)
+                    self._remove_lost_tracking_target(idx)
 
         # propagate unknowns
         for utgt in self.unknown_targets:
@@ -222,16 +252,24 @@ class MultiTargetEnv(gym.Env):
                 info = {"invalid_action": True, "action_mask": self.get_action_mask()}
                 return obs, -1.0, False, False, info
 
-            # Simple reward = total information gain (KL)
-            #reward = total_iG / 1e3   # scale down
-            reward = total_iG
-
+            # Simple reward = total information gain (KL) or punishment for loosing target
+            """ if lost_reward<0:
+                reward = lost_reward
+            else:
+                reward = total_iG / 1e3   # scale down
+            
+            if self.n_targets<self.init_n_target:
+                reward = reward - 5 * (self.init_n_target-self.n_targets) """
+            if lost_reward < 0.:
+                reward = lost_reward
+            else:
+                reward = total_iG
             # Termination
             done = self.step_count >= self.max_steps
             truncated = False
 
             # Info dict can include diagnostics
-            info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask()}
+            info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
             self.obs = obs
 
             return obs, reward, done, truncated, info
@@ -257,10 +295,8 @@ class MultiTargetEnv(gym.Env):
                 if all(d > threshold for d in distances):
                     total_iG += 10.0
                     # Promote detection to a new known target
-                    idx = self.unknown_targets.index(det)
-                    self._add_new_tracking_target(idx)
-                    break
-
+                    self._add_new_tracking_target(det['id'])
+                    
         # --- SEARCH macro: update visit counts and compute reward ---
         self.visit_counts[grid_idx] += 1
         reward = total_iG
@@ -287,7 +323,7 @@ class MultiTargetEnv(gym.Env):
         truncated = False
 
         # Info dict can include diagnostics
-        info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask()}
+        info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask(), "lost_targets": lost_targets}
         self.obs = obs
 
         return obs, reward, done, truncated, info
@@ -306,7 +342,7 @@ class MultiTargetEnv(gym.Env):
         pos0 = np.array([x0_left, y0])
         vel0 = np.array([self.motion_params[target_id], 0.0])
         x0 = np.concatenate([pos0, vel0])
-        covMultiplier = [5.0]
+        covMultiplier = [1.0, 5.0, 10.0]
         P0 = self.P0.copy() * np.random.choice(covMultiplier)
 
         Q = np.eye(self.d_state) * 0.
@@ -368,19 +404,51 @@ class MultiTargetEnv(gym.Env):
         """Promote unknown_targets[unknown_idx] into known targets."""
         if len(self.targets) >= self.max_targets:
             return
-        new = self.unknown_targets.pop(unknown_idx-self.init_n_target)
-        new_id = unknown_idx
+
+        # remove from unknown list
+        for i, element in enumerate(self.unknown_targets):
+            if element.get('id') == unknown_idx:
+                new = self.unknown_targets.pop(i)
+                break
+        else:
+            new = None   # not found
+        #new = self.unknown_targets.pop(unknown_idx-self.init_n_target)
         new_target = {
-            "id": new_id,
+            "id": unknown_idx,
             "x": new['x'].copy(),
             "P": self.P0.copy(),
             "Q": new.get('Q', self.Q0)
         }
         self.targets.append(new_target)
-        self.known_mask[new_id] = True
+        self.known_mask[unknown_idx] = True
         self.n_targets += 1
         self.n_unknown_targets -= 1
+        self.detect_counter += 1
 
+    def _remove_lost_tracking_target(self, target_id):
+        """Move a known target back into unknown targets when it is lost."""
+    
+        # Find the matching target in the known list by ID
+        for i, tgt in enumerate(self.targets):
+            if tgt['id'] == target_id:
+                
+                # Remove from known list
+                removed = self.targets.pop(i)
+
+                # Move to unknown list (keep its covariance!)
+                self.unknown_targets.append({
+                    "id": target_id,
+                    "x": removed["x"].copy(),
+                    "P": removed["P"].copy(),
+                    "Q": removed.get("Q", self.Q0)
+                })
+
+                # Update mask and counters
+                self.known_mask[target_id] = False
+                self.n_targets -= 1
+                self.n_unknown_targets += 1
+                self.lost_counter += 1
+                return
 
     @staticmethod
     def propagate_target_2D(x, P, Q, dt, rng, motion_model="L", motion_param=1.0):
