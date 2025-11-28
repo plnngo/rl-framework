@@ -4,6 +4,7 @@ from matplotlib.colors import to_rgba
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from LSBatchFilter import estimate_all_targets_from_tracks, plot_errors_and_sigmas, process_estimates
+from deterministic_tracker import select_best_action
 from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
 import numpy as np
@@ -170,13 +171,13 @@ def run_random_policy_track(env, n_steps):
             print("No known targets available for tracking at step", step)
             break
 
-        action = int(env.rng.choice(valid_ids))
-        #action = 1
+        #action = int(env.rng.choice(valid_ids))
+        action = 1
         obs, reward, done, truncated, info = env.step(action)
-        for tgt in range(env.n_targets):
+        """ for tgt in range(env.n_targets):
             exceed, x, P = analyse_tracking_task(obs, tgt, env, confidence=0.95)
             if exceed:
-                exceed_target.append([tgt, step])
+                exceed_target.append([tgt, step]) """
 
 
         print(f"Step {step+1:02d}: TRACK target {action}, Reward={reward:.4f}")
@@ -228,7 +229,7 @@ def run_random_policy_track(env, n_steps):
             break
 
     # --- Show all figures together at the end ---
-    print(exceed_target)
+    print(env.n_targets)
     plt.show()
     return np.array(positions), np.array(covariances)
 
@@ -472,10 +473,10 @@ def analyse_tracking_task(obs, target_idx, env, confidence=0.95):
         Covariance matrix of shape (d_state, d_state).
     """
     # check mask: mask vector placed after all per-target blocks
-    mask_offset = int(env.max_targets * env.obs_dim_per_target)
+    """ mask_offset = int(env.max_targets * env.obs_dim_per_target)
     mask_val = obs[mask_offset + int(target_idx)]
     if mask_val <= 0.5:
-        return False
+        return True, None, None """
 
     x, P = extract_target_state_cov(obs, target_idx, env)
     # positional covariance assumed to be in state dims [0,1] (x,y)
@@ -512,7 +513,7 @@ def analyse_tracking_task(obs, target_idx, env, confidence=0.95):
 
     return full_major > float(env.fov_size), x, P
 
-def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False):
+def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, deterministic_policy=False):
     rewards = []
     exceedFOV = []
 
@@ -522,8 +523,6 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False):
 
     for ep in trange(n_episodes, desc="Evaluating"):
         obs, _ = env.reset()
-        exceed_count = 0
-        exceed_target = []
 
         # --- For last episode, store deep copy of env ---
         if ep == n_episodes - 1:
@@ -537,6 +536,8 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False):
             # --- Choose action ---
             if random_policy:
                 action = env.action_space.sample()
+            elif deterministic_policy:
+                action, best_ig, best_update = select_best_action(env, env.dt)
             else:
                 action, _ = model.predict(obs, deterministic=False)
 
@@ -548,24 +549,26 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False):
             if ep == n_episodes - 1:
                 episode_log[t] = {}
 
-            for tgt in range(env.n_targets):
-                exceed, x, P = analyse_tracking_task(obs, tgt, env, confidence=0.95)
-                if exceed and tgt not in exceed_target:
-                    exceed_target.append(tgt)
+            if ep == n_episodes - 1:
+                for tgt in range(env.n_targets):
+                    exceed, x, P = analyse_tracking_task(obs, tgt, env, confidence=0.95)
+                    """ if exceed and tgt not in exceed_target:
+                        exceed_target.append(tgt) """
 
-                # if this is the last episode, store everything
-                if ep == n_episodes - 1 and tgt == info["target_id"]:
-                    episode_log[t][tgt] = {
-                        "id": tgt,
-                        "state": x.copy(),
-                        "cov": P.copy(),
-                        "exceedFOV": bool(exceed),
-                    }
+                    # if this is the last episode, store everything
+                    if info.get("invalid_action") or info.get("catastrophic_loss"):
+                        continue
+                    if tgt == info["target_id"]:
+                        episode_log[t][tgt] = {
+                            "id": tgt,
+                            "state": x.copy(),
+                            "cov": P.copy(),
+                        }
 
             t += 1  # increment timestep
 
         rewards.append(total_reward)
-        exceedFOV.append(exceed_target)
+        exceedFOV.append(env.init_n_target-env.n_targets)
         # --- For last episode, store deep copy of env ---
         if ep == n_episodes - 1:
             last_episode_log = episode_log
@@ -629,7 +632,8 @@ def plot_violin(results_dict, ylabel="Episode Reward"):
     colors = {
         "PPO": "orange",
         "DQN": "green",
-        "Random": "red"
+        "Random": "red",
+        "Det": "blue"
     }
     
     data = []
@@ -825,102 +829,95 @@ def plot_positions(positions, env=None, show_start_end=True):
 @staticmethod
 def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom):
     """
-    Each input (ppo, dqn, random) is a list/array of subarrays.
-    For each method:
-        - Measure the length of each subarray
-        - Compute the mean length
-        - Compute SEM
-    Then plot the results.
+    ppo, dqn, random are lists of arrays.
+    Compute:
+        - global mean over all entries
+        - global std over all entries
+    knownPPO, knownDQN, knownRandom:
+        - compute simple means (kept unchanged)
     """
 
     import numpy as np
     import matplotlib.pyplot as plt
+    from matplotlib.colors import to_rgba
 
-    # Convert to numpy arrays of lengths
-    ppo_lengths = np.array([len(arr) for arr in ppo])
-    dqn_lengths = np.array([len(arr) for arr in dqn])
-    random_lengths = np.array([len(arr) for arr in random])
-
-    # Compute means
+    # --- Compute statistics ---
     means = np.array([
-        ppo_lengths.mean(),
-        dqn_lengths.mean(),
-        random_lengths.mean()
+        np.mean([np.mean(arr) for arr in ppo]),
+        np.mean([np.mean(arr) for arr in dqn]),
+        np.mean([np.mean(arr) for arr in random])
     ])
 
-    # Compute SEMs
-    sem = np.array([
-        ppo_lengths.std(ddof=1) / np.sqrt(len(ppo_lengths)),
-        dqn_lengths.std(ddof=1) / np.sqrt(len(dqn_lengths)),
-        random_lengths.std(ddof=1) / np.sqrt(len(random_lengths))
+    stds = np.array([
+        np.std([np.mean(arr) for arr in ppo], ddof=1),
+        np.std([np.mean(arr) for arr in dqn], ddof=1),
+        np.std([np.mean(arr) for arr in random], ddof=1)
     ])
 
+    # --- Known means remain unchanged ---
     known_means = np.array([
         np.mean(knownPPO),
         np.mean(knownDQN),
         np.mean(knownRandom)
     ])
 
-    # Plot
+    # --- Plotting ---
     labels = ["PPO", "DQN", "Random"]
     x = np.arange(len(labels))
     colors = ["blue", "orange", "green"]
-
-    # Create lighter colors for baseline
     light_colors = [to_rgba(c, alpha=0.35) for c in colors]
 
     plt.figure(figsize=(7, 5))
-    # Plot known baseline bars (behind)
+
+    # Baseline bars (tracking targets)
     baseline_bars = plt.bar(
-        x,
-        known_means,
+        x, known_means,
         width=0.6,
         color=light_colors,
         label="Number of tracking targets",
         zorder=1
     )
 
-    # Add numeric labels for known means (baseline bars)
     for bar, value in zip(baseline_bars, known_means):
         plt.text(
             bar.get_x() + bar.get_width() / 2,
             value,
             f"{value:.2f}",
-            ha='center',
-            va='bottom',
+            ha="center",
+            va="bottom",
             fontsize=9,
             color="black"
         )
 
-    # Plot main bars (on top)
+    # Main bars (lost targets, with std)
     bars = plt.bar(
-        x,
-        means,
-        yerr=sem,
+        x, means,
+        yerr=stds,
         capsize=8,
         color=colors,
         label="Number of lost targets",
         zorder=2
     )
 
-    # Add height labels
+    # Bar height labels
     for bar in bars:
         height = bar.get_height()
         plt.text(
             bar.get_x() + bar.get_width() / 2,
             height,
             f"{height:.2f}",
-            ha='center',
-            va='bottom'
+            ha="center",
+            va="bottom"
         )
 
     plt.xticks(x, labels)
-    plt.ylabel("Mean Target Lost")
-    plt.title("Mean Target Lost Across Agents (Track vs Lost)")
+    plt.ylabel("Mean Lost Targets")
+    plt.title("Mean Lost Targets Across Agents (Global Mean + Std)")
     plt.legend()
 
     plt.tight_layout()
     plt.show()
+
 
 def unpack_cholesky(L_flat, dim):
     """
@@ -1092,7 +1089,8 @@ def extract_tracks_from_log(last_episode_log, n_targets=5):
 
 if __name__ == "__main__":
     # ****** Test with random policy ******
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=42, mode="track")
+    n_targets = 5
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
 
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
@@ -1100,7 +1098,7 @@ if __name__ == "__main__":
 
     # Run random policy
     #positions, covariances = run_random_policy_search(env, n_steps=10)
-    positions, covariances = run_random_policy_track(env, n_steps=20)
+    #positions, covariances = run_random_policy_track(env, n_steps=20)
     #positions, covariances = run_random_policy_combined(env, n_steps=10)
 
     """ plot_positions(positions, env) 
@@ -1114,11 +1112,11 @@ if __name__ == "__main__":
     # Visualize trained agent
     visualize_trained_agent(env, model, n_steps=30) """
     
-def anotherMethod():
+#def anotherMethod():
     seeds = [42, 123, 321]
 
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="track")
-    n_episodes = 100
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    n_episodes = 50
 
     """ # ****** Search ******
     # ****** Random policy ******
@@ -1162,8 +1160,15 @@ def anotherMethod():
     plot_detection_bar_chart(detection_results) """
 
     # ****** Track ******
+    # ****** Deterministic policy ******
+    det_rewards, exceedFOV_det, last_env, last_episode_log = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    print(exceedFOV_det)
+
     # ****** Random policy ******
-    random_rewards, exceedFOV_random, last_env, last_episode_log = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=True)
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    # Reset environment ONCE and plot initial positions right after
+    obs = env.reset()
+    random_rewards, exceedFOV_random, last_env, last_episode_log = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
     print(exceedFOV_random)
     """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
@@ -1182,10 +1187,13 @@ def anotherMethod():
         ) """
  
     # ****** PPO agent ******
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    # Reset environment ONCE and plot initial positions right after
+    obs = env.reset()
     ppo_model = PPO.load("agents/ppo_track_trained", env=env)
-    ppo_rewards, exceedFOV_ppo, last_env, last_episode_log = evaluate_agent_track(env, model=ppo_model, n_episodes=n_episodes)
-    """ print(exceedFOV_ppo)
-    visualize_initial_positions(last_env)
+    ppo_rewards, exceedFOV_ppo, last_env, last_episode_log = evaluate_agent_track(env, model=ppo_model, n_episodes=n_episodes, deterministic_policy=False)
+    print(exceedFOV_ppo)
+    """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
     """ tracks = extract_tracks_from_log(last_episode_log)
     estimates = estimate_all_targets_from_tracks(tracks, last_env)
@@ -1203,9 +1211,11 @@ def anotherMethod():
  
 
     # ****** DQN agent ******
+    """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    obs = env.reset()
     dqn_model = DQN.load("agents/dqn_track_trained", env=env)
     dqn_rewards, exceedFOV_dqn, last_env, last_episode_log = evaluate_agent_track(env, model=dqn_model, n_episodes=n_episodes)
-    print(exceedFOV_dqn)
+    print(exceedFOV_dqn) """
     """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
     tracks = extract_tracks_from_log(last_episode_log)
@@ -1227,11 +1237,11 @@ def anotherMethod():
     reward_results = {
         "Random": random_rewards,
         "PPO": ppo_rewards,
-        "DQN": dqn_rewards
+        "Det": det_rewards
     }
     plot_violin(reward_results, ylabel="Episode Reward")
-
-    plot_means_lost_targets(exceedFOV_ppo, env.n_targets, exceedFOV_dqn, env.n_targets, exceedFOV_random, env.n_targets)
+    exceedFOV_dqn = [5]
+    plot_means_lost_targets(exceedFOV_ppo, n_targets, exceedFOV_det, n_targets, exceedFOV_random, n_targets)
 
  
 
