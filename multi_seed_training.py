@@ -15,7 +15,7 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 50_000
+total_timesteps = 20_000
 mode = "track"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
@@ -80,16 +80,16 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = PPO(
             "MlpPolicy",
             env,
-            gamma=0.9158906517459942, #0.9790210247139031,   
-            n_steps=1024,
-            ent_coef=0.0013392533378982774, #0.03158387252345037, 
-            learning_rate=0.0006609120604125945,    #0.0007266996909845838,   
-            vf_coef=0.3088596031455526, #0.8349958665992091, 
-            max_grad_norm=0.3693696658724082, #0.7926595046318459,   
-            gae_lambda=0.9572736445545191, #0.886078389184115,  
+            gamma=0.99, #0.9158906517459942, #0.9790210247139031,   
+            n_steps=128, #1024,
+            ent_coef=0.005, #0.0013392533378982774, #0.03158387252345037, 
+            learning_rate=0.0003, #0.0006609120604125945,    #0.0007266996909845838,   
+            vf_coef=0.5, #0.3088596031455526, #0.8349958665992091, 
+            max_grad_norm=1.0, #0.3693696658724082, #0.7926595046318459,   
+            gae_lambda=0.8, #0.9572736445545191, #0.886078389184115,  
             n_epochs=10,
-            clip_range=0.3890633888493019, #0.38403499436025856,  
-            batch_size=128, #256,
+            clip_range=0.5, #0.3890633888493019, #0.38403499436025856,  
+            batch_size=256, #128, #256,
             verbose=1,
         )
 

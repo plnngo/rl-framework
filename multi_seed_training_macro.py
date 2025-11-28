@@ -18,7 +18,7 @@ from train_agent import SharedLivePlot, LivePlotCallback
 
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 50_000
+total_timesteps = 15_000
 save_dir = "macro_results"
 os.makedirs(save_dir, exist_ok=True)
 
