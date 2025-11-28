@@ -70,35 +70,55 @@ def objective(trial, shared_plotter=None):
 
     params = {
         # --- Learning ---
-        "learning_rate": trial.suggest_float("learning_rate", 5e-5, 4e-4, log=True),
-        "gamma": trial.suggest_float("gamma", 0.95, 0.975),
+        "learning_rate": trial.suggest_float(
+            "learning_rate", 5e-5, 4e-4, log=True
+        ),
+        "gamma": trial.suggest_float(
+            "gamma", 0.9, 0.95
+        ),
 
         # --- Replay buffer ---
-        "buffer_size": trial.suggest_categorical("buffer_size", [30_000, 50_000, 100_000]),
-        "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+        "buffer_size": trial.suggest_categorical(
+            "buffer_size", [30_000, 50_000, 100_000]
+        ),
+        "batch_size": trial.suggest_categorical(
+            "batch_size", [32, 64, 128]
+        ),
 
-        # --- Behaviour ---
-        "exploration_fraction": trial.suggest_float("exploration_fraction", 0.5, 0.8),
-        "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.03, 0.1),
+        # --- Behaviour (exploration schedule) ---
+        "exploration_fraction": trial.suggest_float(
+            "exploration_fraction", 0.5, 0.8
+        ),
+        "exploration_final_eps": trial.suggest_float(
+            "exploration_final_eps", 0.03, 0.1
+        ),
 
         # --- Training schedule ---
-        "train_freq": trial.suggest_categorical("train_freq", [1, 4]),
-        "gradient_steps": trial.suggest_categorical("gradient_steps", [4, 8]),
-        "learning_starts": trial.suggest_categorical("learning_starts", [5000, 10000]),
+        "train_freq": trial.suggest_categorical(
+            "train_freq", [1, 4]
+        ),
+        "gradient_steps": trial.suggest_categorical(
+            "gradient_steps", [4, 8]
+        ),
+        "learning_starts": trial.suggest_categorical(
+            "learning_starts", [5000, 10000]
+        ),
 
-        # --- Target update ---
+        # --- Target network update ---
         "target_update_interval": trial.suggest_categorical(
             "target_update_interval", [8000, 12000]
         ),
 
         # --- Stabilization ---
-        "max_grad_norm": trial.suggest_float("max_grad_norm", 0.2, 2.0),
+        "max_grad_norm": trial.suggest_float(
+            "max_grad_norm", 0.2, 2.0
+        ),
 
         # --- Network architecture ---
         "policy_kwargs": dict(
             net_arch=trial.suggest_categorical(
                 "net_arch", [(128, 128), (256, 256)]
-            ),
+            )
         ),
     }
     trial_name = f"trial_{trial.number}"
@@ -136,7 +156,7 @@ def main():
         pruner=optuna.pruners.MedianPruner(),
     )
 
-    study.optimize(lambda trial: objective(trial, shared_plotter), n_trials=10)
+    study.optimize(lambda trial: objective(trial, shared_plotter), n_trials=7)
 
     print("Best trial:")
     print(study.best_trial.params)
