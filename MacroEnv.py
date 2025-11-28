@@ -3,7 +3,8 @@ from gymnasium import spaces
 import numpy as np
 import copy
 
-from multi_target_env import MultiTargetEnv
+from deterministic_tracker import select_best_action
+from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 def unwrap_env(env):
         # Monitor wrapper
@@ -50,6 +51,11 @@ class MacroEnv(gym.Env):
         self.fov_size = fov_size
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
+        self.threshold_fov = 0.5
+        self.n_targets = n_targets
+        self.n_unknown_targets = n_unknown_targets
+        self.lost_counter = 0
+        self.detect_counter = 0
 
         # --------------------
         # Micro environments (created internally)
@@ -66,8 +72,8 @@ class MacroEnv(gym.Env):
         real_track_env  = unwrap_env(self.track_env)
 
         # Sync micro environments to match base_env
-        self._sync_envs(self.base_env, real_search_env)
-        self._sync_envs(self.base_env, real_track_env)
+        _sync_envs(self.base_env, real_search_env)
+        _sync_envs(self.base_env, real_track_env)
 
         return obs, info
 
@@ -83,27 +89,32 @@ class MacroEnv(gym.Env):
         real_track_env  = unwrap_env(self.track_env)
 
         # sync both with current world
-        self._sync_envs(self.base_env, real_search_env)
-        self._sync_envs(self.base_env, real_track_env)
+        _sync_envs(self.base_env, real_search_env)
+        _sync_envs(self.base_env, real_track_env)
 
         # choose agent
         if macro_action == 0:
             obs = real_search_env.obs
             micro_action, _ = self.search_agent.predict(obs, deterministic=False)
             next_obs, _, done, truncated, info = real_search_env.step(micro_action)
-            macro_reward = self._compute_search_reward(real_search_env)
+            if len(info["lost_targets"]) == 0:
+                macro_reward = self._compute_search_reward(real_search_env)
+            else:
+                # target got lost
+                macro_reward = -1 * len(info["lost_targets"])
 
             # sync back into base env
-            self._sync_envs(real_search_env, self.base_env)
+            _sync_envs(real_search_env, self.base_env)
 
         else:
             obs = real_track_env.obs
-            micro_action, _ = self.track_agent.predict(obs, deterministic=False)
+            #micro_action, _ = self.track_agent.predict(obs, deterministic=False)
+            micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
             next_obs, _, done, truncated, info = real_track_env.step(micro_action)
             macro_reward = self._compute_track_reward(self.base_env)
 
             # sync back into base env
-            self._sync_envs(real_track_env, self.base_env)
+            _sync_envs(real_track_env, self.base_env)
 
         return next_obs, macro_reward, done, truncated, info
 
@@ -128,15 +139,32 @@ class MacroEnv(gym.Env):
         """
         Reward = 1 if all known targets' uncertainties fit inside FOV.
         """
-        post_in_fov_unc = self._uncertainty_within_fov(env, margin=1.0)
+        post_in_fov_unc = []
+        post_in_fov = self._uncertainty_within_fov(env, margin=1.0)
+        for obj in env.targets:
+            x = obj['x']
+            P = obj['P']
+            prob = compute_fov_prob_single(self.fov_size, x, P)
+
+            # check if probability of being in FOV is larger than threshold
+            post_in_fov_unc.append(prob>self.threshold_fov)
         return 1.0 if all(post_in_fov_unc) else 0.0
 
     def _compute_track_reward(self, env):
         """
         Reward = 1 if any target's 3sigma uncertainty ellipse exceeds 80% of FOV.
         """
-        pre_in_fov_unc = self._uncertainty_within_fov(env, margin=0.8)
-        needs_tracking = not all(pre_in_fov_unc)
+        risk = []
+        pre_in_fov = self._uncertainty_within_fov(env, margin=0.8)
+        for obj in env.targets:
+            x = obj['x']
+            P = obj['P']
+            prob = compute_fov_prob_single(self.fov_size, x, P)
+
+            # check if probability of being in FOV is lower than threshold
+            risk.append(prob<self.threshold_fov)
+
+        needs_tracking = any(risk)
         return 1.0 if needs_tracking else 0.0
         
     def _uncertainty_within_fov(self, env, margin=1.0):
@@ -163,34 +191,36 @@ class MacroEnv(gym.Env):
 
         return within
     
-    def _sync_envs(self, source_env, dest_env):
-        """
-        Synchronize dynamic state between MultiTargetEnv instances.
-        Copies all relevant state information so that both environments
-        represent the same physical world at the current time step.
-        """
-        # --- Core target and environment state ---
-        dest_env.targets = [copy.deepcopy(t) for t in source_env.targets]
-        dest_env.unknown_targets = [copy.deepcopy(t) for t in source_env.unknown_targets]
-        dest_env.n_targets = source_env.n_targets
-        dest_env.n_unknown_targets = source_env.n_unknown_targets
+def _sync_envs(source_env, dest_env):
+    """
+    Synchronize dynamic state between MultiTargetEnv instances.
+    Copies all relevant state information so that both environments
+    represent the same physical world at the current time step.
+    """
+    # --- Core target and environment state ---
+    dest_env.targets = [copy.deepcopy(t) for t in source_env.targets]
+    dest_env.unknown_targets = [copy.deepcopy(t) for t in source_env.unknown_targets]
+    dest_env.n_targets = source_env.n_targets
+    dest_env.n_unknown_targets = source_env.n_unknown_targets
 
-        # --- Tracking-related state ---
-        dest_env.known_mask = np.copy(source_env.known_mask)
-        dest_env.obs = np.copy(source_env.obs)
-        dest_env.motion_model = np.copy(source_env.motion_model)
-        dest_env.motion_params = np.copy(source_env.motion_params)
+    # --- Tracking-related state ---
+    dest_env.known_mask = np.copy(source_env.known_mask)
+    dest_env.obs = np.copy(source_env.obs)
+    dest_env.motion_model = np.copy(source_env.motion_model)
+    dest_env.motion_params = np.copy(source_env.motion_params)
+    dest_env.lost_counter = source_env.lost_counter
+    dest_env.detect_counter = source_env.detect_counter
 
-        # --- Search-related state ---
-        dest_env.visit_counts = np.copy(source_env.visit_counts)
-        dest_env.last_search_idx = source_env.last_search_idx
-        dest_env.prev_search_pos = (
-            None if source_env.prev_search_pos is None
-            else np.copy(source_env.prev_search_pos)
-        )
+    # --- Search-related state ---
+    dest_env.visit_counts = np.copy(source_env.visit_counts)
+    dest_env.last_search_idx = source_env.last_search_idx
+    dest_env.prev_search_pos = (
+        None if source_env.prev_search_pos is None
+        else np.copy(source_env.prev_search_pos)
+    )
 
-        # --- Time step ---
-        dest_env.step_count = source_env.step_count
+    # --- Time step ---
+    dest_env.step_count = source_env.step_count
 
         # --- Optional: RNG state, if you want identical stochasticity ---
         #dest_env.rng.bit_generator.state = copy.deepcopy(source_env.rng.bit_generator.state)
