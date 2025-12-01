@@ -97,18 +97,18 @@ def plot_task_log(task_log, title="Action Timeline"):
 
 if __name__ == "__main__":
     seeds = [42, 123, 321]
-    n_episodes = 1
+    n_episodes = 10
     n_targets = 5
     n_unknown_targets =100
     envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
     rewardsRandom, detection_countRandom, detect_count3Random, exceedFOVRandom, last_envRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom = evaluate_agent_macro(env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, n_targets=n_targets, n_unknown_targets=n_unknown_targets)
 
     envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
-    ppo_model = PPO.load("agents/ppo_macro_trained", env=envPPO)
+    ppo_model = PPO.load("agents/ppo_macro_shorttrained", env=envPPO)
     rewardsPPO, detection_countPPO, detect_count3PPO, exceedFOVPPO, last_envPPO, last_episode_logPPO, knownPPO, last_tasks_logPPO = evaluate_agent_macro(env=envPPO, model=ppo_model, n_episodes=n_episodes, random_policy=False, n_targets=n_targets, n_unknown_targets=n_unknown_targets)
 
     envDQN = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
-    dqn_model = DQN.load("agents/dqn_macro_trained", env=envDQN)
+    dqn_model = DQN.load("agents/dqn_macro_shorttrained", env=envDQN)
     rewardsDQN, detection_countDQN, detect_count3DQN, exceedFOVDQN, last_envDQN, last_episode_logDQN, knownDQN, last_tasks_logDQN = evaluate_agent_macro(env=envDQN, model=dqn_model, n_episodes=n_episodes, random_policy=False, n_targets=n_targets, n_unknown_targets=n_unknown_targets)
 
     # ****** Plot reward distributions ******
