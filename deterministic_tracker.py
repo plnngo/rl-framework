@@ -1,4 +1,4 @@
-from multi_target_env import MultiTargetEnv, compute_kl_divergence
+from multi_target_env import MultiTargetEnv, compute_fov_prob_single, compute_kl_divergence
 
 
 def select_best_action(env, dt=None):
@@ -28,6 +28,7 @@ def select_best_action(env, dt=None):
 
     best_target_id = None
     best_ig = -float('inf')
+    highest_risk = -float('inf')
     best_update = None
 
     # Loop through all possible sensing actions: choose one target
@@ -50,10 +51,16 @@ def select_best_action(env, dt=None):
 
         # 3. Compute information gain (KL divergence)
         ig = compute_kl_divergence(x_pred, P_pred, x_upd, P_upd)
+        risk = 1-compute_fov_prob_single(env.fov_size, x_pred, P_pred)
 
         # 4. Keep the best
-        if ig > best_ig:
+        """ if ig > best_ig:
             best_ig = ig
+            best_target_id = idx
+            best_update = {"x": x_upd, "P": P_upd} """
+        if risk > highest_risk:
+            best_ig = ig
+            highest_risk = risk
             best_target_id = idx
             best_update = {"x": x_upd, "P": P_upd}
 
