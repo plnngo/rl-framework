@@ -52,6 +52,7 @@ class MacroEnv(gym.Env):
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
         self.threshold_fov = 0.5
+        self.tracking_requested = 0.7
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
         self.lost_counter = 0
@@ -97,11 +98,18 @@ class MacroEnv(gym.Env):
             obs = real_search_env.obs
             micro_action, _ = self.search_agent.predict(obs, deterministic=False)
             next_obs, _, done, truncated, info = real_search_env.step(micro_action)
-            if len(info["lost_targets"]) == 0:
+            trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self.base_env)
+            if (sum(trackingNeeded) + sum(trackingReallyNeeded))>=1:
+                # tracking nedded instead of 
+                macro_reward = -0.5 * (sum(trackingNeeded) + sum(trackingReallyNeeded))
+            else:
+                macro_reward = 1
+
+            """ if len(info["lost_targets"]) == 0:
                 macro_reward = self._compute_search_reward(real_search_env)
             else:
                 # target got lost
-                macro_reward = -1 * len(info["lost_targets"])
+                macro_reward = -1 * len(info["lost_targets"]) """
 
             # sync back into base env
             _sync_envs(real_search_env, self.base_env)
@@ -111,7 +119,13 @@ class MacroEnv(gym.Env):
             #micro_action, _ = self.track_agent.predict(obs, deterministic=False)
             micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
             next_obs, _, done, truncated, info = real_track_env.step(micro_action)
-            macro_reward = self._compute_track_reward(self.base_env)
+            trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self.base_env)
+            if any(trackingNeeded):
+                macro_reward = 2.0
+            elif any(trackingReallyNeeded):
+                macro_reward = 3.0
+            else:
+                macro_reward = -1.0
 
             # sync back into base env
             _sync_envs(real_track_env, self.base_env)
@@ -140,32 +154,37 @@ class MacroEnv(gym.Env):
         Reward = 1 if all known targets' uncertainties fit inside FOV.
         """
         post_in_fov_unc = []
-        post_in_fov = self._uncertainty_within_fov(env, margin=1.0)
+        post_track_required = []
+        #post_in_fov = self._uncertainty_within_fov(env, margin=1.0)
         for obj in env.targets:
             x = obj['x']
             P = obj['P']
             prob = compute_fov_prob_single(self.fov_size, x, P)
 
             # check if probability of being in FOV is larger than threshold
-            post_in_fov_unc.append(prob>self.threshold_fov)
-        return 1.0 if all(post_in_fov_unc) else 0.0
+            post_in_fov_unc.append(prob>self.tracking_requested)
+            post_track_required.append(prob<self.tracking_requested and prob > self.threshold_fov)
+        return 2.0 if all(post_in_fov_unc) else 1 if any(post_track_required) else 0
 
     def _compute_track_reward(self, env):
         """
         Reward = 1 if any target's 3sigma uncertainty ellipse exceeds 80% of FOV.
         """
         risk = []
-        pre_in_fov = self._uncertainty_within_fov(env, margin=0.8)
+        riskier = []
+        #pre_in_fov = self._uncertainty_within_fov(env, margin=0.8)
         for obj in env.targets:
             x = obj['x']
             P = obj['P']
             prob = compute_fov_prob_single(self.fov_size, x, P)
 
             # check if probability of being in FOV is lower than threshold
-            risk.append(prob<self.threshold_fov)
+            risk.append(prob<self.tracking_requested)
+            riskier.append(prob<self.threshold_fov)
 
-        needs_tracking = any(risk)
-        return 1.0 if needs_tracking else 0.0
+        """ needs_tracking = any(risk)
+        return 2.0 if needs_tracking else 3.0 if any(riskier) else -1.0  """
+        return risk, riskier
         
     def _uncertainty_within_fov(self, env, margin=1.0):
         """
