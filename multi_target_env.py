@@ -5,7 +5,7 @@ from scipy.stats import norm
 from scipy.linalg import expm
 
 class MultiTargetEnv(gym.Env):
-    def __init__(self, n_targets=5, n_unknown_targets = 100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=300, seed=None, mode="combined"):
+    def __init__(self, n_targets=5, n_unknown_targets = 100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined"):
         super().__init__()
         self.init_n_target = n_targets
         self.init_n_unknown_target = n_unknown_targets
@@ -181,6 +181,7 @@ class MultiTargetEnv(gym.Env):
         # reward related to neglected known targets
         lost_reward = 0.0
         prob_reward = 0.0
+        lost = 0
         lost_targets = []
 
         """ # --- Catastrophic failure: a target was lost ---
@@ -188,7 +189,7 @@ class MultiTargetEnv(gym.Env):
             obs = self._get_obs()
             self.step_count += 1
 
-            reward = -10.0    # choose appropriate magnitude
+            reward = -1.0    # choose appropriate magnitude
             done = True
             truncated = False
 
@@ -218,15 +219,20 @@ class MultiTargetEnv(gym.Env):
                 
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
-                total_iG = iG
-                #total_iG = 0
+                #total_iG = iG
+                lost = 1 - compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                if lost>total_iG:
+                    total_iG = lost_reward
+
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                if (1-prob)>total_iG:
+                    total_iG = 1-prob
                 prob_reward += prob
                 if prob<self.threshold_fov:
                     # target is considered as lost
-                    #lost_reward = lost_reward-1
+                    lost_reward = lost_reward-0.25
                     lost_targets.append(tgt)
                     self._remove_lost_tracking_target(idx)
 
@@ -260,10 +266,12 @@ class MultiTargetEnv(gym.Env):
             
             if self.n_targets<self.init_n_target:
                 reward = reward - 5 * (self.init_n_target-self.n_targets) """
-            if lost_reward < 0.:
-                reward = lost_reward
+            if lost == total_iG:
+                reward = 1
             else:
-                reward = total_iG
+                reward = -1
+            if self.n_targets == self.init_n_target:
+                reward += 1
             # Termination
             done = self.step_count >= self.max_steps
             truncated = False
@@ -278,6 +286,8 @@ class MultiTargetEnv(gym.Env):
         detections = []
         fov_halfWidth = self.fov_size / 2.0
         for obj in self.targets + self.unknown_targets:
+            if search_pos is None:
+                print("Searching Objective was selected but search position is null")
             dx = obj['x'][0] - search_pos[0]
             dy = obj['x'][1] - search_pos[1]
             if abs(dx) <= fov_halfWidth and abs(dy) <= fov_halfWidth:
