@@ -120,18 +120,18 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            learning_rate=0.00011112022098715457,
-            buffer_size=100_000,
+            learning_rate=0.00010917134021893014,
+            buffer_size=20_000,
             batch_size=64,
-            gamma=0.9735540181788884,
-            train_freq=1,
+            gamma=0.965849106792237,
+            train_freq=4,
             gradient_steps=8,
-            learning_starts=2000,
-            exploration_fraction=0.20831602508681876,
-            exploration_final_eps=0.044816056736162124,
-            target_update_interval=15_000,
-            max_grad_norm=1.8972857042327866,
-            policy_kwargs=dict(net_arch=[128, 128]),
+            learning_starts=5000,
+            exploration_fraction=0.3908456292795791,
+            exploration_final_eps=0.05447874562759111,
+            target_update_interval=5_000,
+            max_grad_norm=1.058094230288445,
+            policy_kwargs=dict(net_arch=[256, 256]),
             verbose=1,
         )
 
@@ -217,9 +217,9 @@ def main():
     train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # --- DQN ---
-    """ color_dqn = cm.get_cmap("tab10")(1)
+    color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir) """
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)
