@@ -6,8 +6,11 @@ from collections import defaultdict
 from typing import Optional
 from graphviz import Digraph, Source
 
+from MacroEnv import _sync_envs
+from deterministic_tracker import select_best_action
+
 class MCTSNode:
-    def __init__(self, parent=None, action=None, state=None, done=False):
+    def __init__(self, parent=None, macro_action=None, micro_action=None, env=None, done=False):
         """
         parent: parent node
         action: action that led from parent -> this node
@@ -15,30 +18,30 @@ class MCTSNode:
         done: whether this state is terminal
         """
         self.parent = parent
-        self.action = action
-        self.state = state
+        self.macro_action = macro_action
+        self.micro_action = micro_action
+        self.env = env
         self.done = done
 
         # MCTS statistics
         self.children = {}  # action_int -> MCTSNode
         self.visit_count = 0
-        self.cum_reward_vec = None
-        self.utility_vec = None
+        self.imm_reward_vec = None
+        self.value_vec = None
         self.untried_actions = None
 
     def is_fully_expanded(self):
-        return self.untried_actions is not None and len(self.untried_actions) == 0
+        return True if (len(list(self.children.values()))== 2) else False
+        #return self.untried_actions is not None and len(self.untried_actions) == 0
 
 class MCTS:
-    def __init__(self, env, n_objectives=None, rollout_depth=10, n_simulations=5_000,
+    def __init__(self, env, n_objectives=None, rollout_depth=5, n_simulations=10,
                  exploration_const=math.sqrt(2), gamma=0.95, mode=None, rng=None):
         self.env = env
         self.n_simulations = n_simulations
         self.rollout_depth = rollout_depth
         self.C = exploration_const
         self.gamma = gamma
-        self.mode = env.mode
-        self.rng = np.random.default_rng() if rng is None else rng
         self.n_objectives = n_objectives or 2  # default to search + track
         # Precompute action space for convenience if env provides
         if hasattr(env, "action_space"):
@@ -59,7 +62,10 @@ class MCTS:
         # --- Construct [searchR, trackR] vectors ---
         total_rtrack = []
         for child in children_list:
-            avg_util = child.utility_vec if child.utility_vec is not None else np.zeros(self.n_objectives)
+            if child.value_vec is not None and child.visit_count > 0:
+                avg_util = child.value_vec / child.visit_count
+            else:
+                avg_util = np.zeros(self.n_objectives)
             searchR = avg_util[0]
             trackR = np.sum(avg_util[1:])
             total_rtrack.append([searchR, trackR])
@@ -75,8 +81,8 @@ class MCTS:
         # --- Compute UCB ---
         for i, child in enumerate(children_list):
             n_child = max(1, child.visit_count)
-            base_utility = np.sum(child.utility_vec) if child.utility_vec is not None else 0.0
-            ucb[i] = base_utility + utilities[i] + self.C * math.sqrt(math.log(n_parent) / n_child)
+            #base_utility = np.sum(child.utility_vec) if child.utility_vec is not None else 0.0
+            ucb[i] = utilities[i] + self.C * math.sqrt(math.log(n_parent) / n_child)
 
         # --- Select max UCB (break ties randomly) ---
         max_ucb = np.max(ucb)
@@ -86,73 +92,109 @@ class MCTS:
     def _expand(self, node, env):
         """Randomly sample a macro/micro action based on mode and add a child node."""
         # 1. Sample macro action
-        if self.mode == "search":
+        """ if self.mode == "search":
             macro_action = 0
         elif self.mode == "track":
             macro_action = 1
-        else:  # both
+        else:  # both """
+        if len(node.children) > 0:
+            # Extract existing macro actions of siblings
+            sibling_macros = list(node.children)
+
+            available = [m for m in range(self.n_objectives) if m not in sibling_macros]
+
+            if len(available) == 0:
+                return None
+
+            macro_action = np.random.choice(available)
+
+        else:
+            # No children yet → both macro actions are allowed
             macro_action = np.random.choice([0, 1])
 
         # 2. Sample micro action
+        micro_action = None
         if macro_action == 0:  # SEARCH
-            micro_search = np.random.choice(len(env.grid_coords))
-            micro_track = None
+            obs = env.search_env.env.obs
+            micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+            next_obs, rewards, done, truncated, info = env.search_env.env.step(micro_action) 
+            _sync_envs(env.search_env.env, env.base_env)
+            _sync_envs(env.search_env.env, env.track_env.env)
         else:  # TRACK
-            known_targets = np.where(env.known_mask)[0]
+            known_targets = np.where(env.track_env.env.known_mask)[0]
             if len(known_targets) == 0:
                 # fallback to search
                 macro_action = 0
-                micro_search = np.random.choice(len(env.grid_coords))
+                obs = env.search_env.env.obs
+                micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
+                _sync_envs(env.search_env.env, env.base_env)
+                _sync_envs(env.search_env.env, env.track_env.env)
                 micro_track = None
             else:
-                micro_track = np.random.choice(known_targets)
+                #micro_track = np.random.choice(known_targets)
+                micro_action, best_ig, best_update = select_best_action(env.track_env.env, self.env.track_env.env.dt)
                 micro_search = None
+                action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
+                next_obs, rewards, done, truncated, info = env.track_env.env.step(action) 
+                _sync_envs(env.track_env.env, env.base_env)
+                _sync_envs(env.track_env.env, env.search_env.env)
 
         # 3. Encode and step action
-        action = env.encode_action(macro_action, micro_search, micro_track)
-        next_obs, rewards, done, truncated, info = env.step(action)
+        """ action = env.track_env.env.encode_action(macro_action, micro_search, micro_track)
+        next_obs, rewards, done, truncated, info = env.track_env.env.step(action) """
         if info.get("invalid_action", False):
-            return None, None
+            return None
 
         # 4. Create child node
-        child_node = MCTSNode(parent=node, action=action, state=next_obs, done=done)
-        child_node.cum_reward_vec = np.zeros(self.n_objectives)
-        child_node.utility_vec = np.zeros(self.n_objectives)
-        node.children[action] = child_node
+        child_node = MCTSNode(parent=node, macro_action=macro_action, micro_action=micro_action, env=env, done=done)
+        child_node.imm_reward_vec = np.zeros(self.n_objectives)
+        child_node.value_vec = np.zeros(self.n_objectives)
+        child_node.imm_reward_vec[macro_action] = rewards
+        node.children[macro_action] = child_node
 
-        return child_node, action
+        return child_node
 
     def _rollout(self, env, max_depth=None):
         max_depth = max_depth or self.rollout_depth
-        total_reward = np.zeros(self.n_objectives)
+        total_rewards_array = []
         
         for _ in range(max_depth):
             # Sample macro action
-            if self.mode == "search":
+            """ if self.mode == "search":
                 macro_action = 0
             elif self.mode == "track":
                 macro_action = 1
-            else:
-                macro_action = np.random.choice([0, 1])
+            else: """
+            macro_action = np.random.choice([0, 1])
             
             # Sample micro action
             if macro_action == 0:  # SEARCH
-                micro_search = np.random.choice(len(env.grid_coords))
+                obs = env.search_env.env.obs
+                micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
+                _sync_envs(env.search_env.env, env.base_env)
+                _sync_envs(env.search_env.env, env.track_env.env)
                 micro_track = None
             else:  # TRACK
-                known_targets = np.where(env.known_mask)[0]
+                known_targets = np.where(env.track_env.env.known_mask)[0]
                 if len(known_targets) == 0:
                     macro_action = 0
-                    micro_search = np.random.choice(len(env.grid_coords))
+                    obs = env.search_env.env.obs
+                    micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                    next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
+                    _sync_envs(env.search_env.env, env.base_env)
+                    _sync_envs(env.search_env.env, env.track_env.env)
                     micro_track = None
                 else:
-                    micro_track = np.random.choice(known_targets)
+                    micro_action, best_ig, best_update = select_best_action(env.track_env.env, self.env.track_env.env.dt)
                     micro_search = None
+                    action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
+                    next_obs, reward, done, truncated, info = env.track_env.env.step(action) 
+                    _sync_envs(env.track_env.env, env.base_env)
+                    _sync_envs(env.track_env.env, env.search_env.env)
             
-            # Encode and execute
-            action = env.encode_action(macro_action, micro_search, micro_track)
-            next_obs, reward, done, truncated, info = env.step(action)
-            
+           
             # Build proper reward vector [searchR, trackR]
             reward_vec = np.zeros(self.n_objectives)
             if info["macro"] == 0:
@@ -160,33 +202,35 @@ class MCTS:
             elif info["macro"] == 1:
                 reward_vec[1] = reward  # track reward
             
-            total_reward += reward_vec
+            total_rewards_array.append(reward_vec)
 
             if done or truncated:
                 break
         
-        return total_reward
+        # Compute discounted reward vector
+        running = np.zeros(self.n_objectives)
+        for r in reversed(total_rewards_array):
+            running = r + self.gamma * running
+
+        return running
 
     def _backprop(self, path, reward_vec):
         """Backpropagate discounted reward vector along path."""
         discounted_reward = np.array(reward_vec, dtype=float)
         for node in reversed(path):
             node.visit_count += 1
-            if node.utility_vec is None:
-                node.utility_vec = discounted_reward.copy()
-            else:
-                node.utility_vec += (discounted_reward - node.utility_vec) / node.visit_count
-            if node.cum_reward_vec is None:
-                node.cum_reward_vec = discounted_reward.copy()
-            else:
-                node.cum_reward_vec += discounted_reward
-            discounted_reward *= self.gamma
+            discounted_reward = node.imm_reward_vec + self.gamma * discounted_reward.copy()
 
-    def _get_dominating_vecs(self, all_vectors, to_compare, order):
+            if node.value_vec is None:
+                node.value_vec = discounted_reward
+            else:
+                node.value_vec += (discounted_reward - node.value_vec) / node.visit_count
+
+    def _get_dominating_vecs(self, all_vectors, to_compare, maximize):
         dominating = []
         for vec in all_vectors:
             dominates = True
-            for v, t, maximize in zip(vec, to_compare, order):
+            for v, t, maximize in zip(vec, to_compare, maximize):
                 if maximize:
                     if v < t:  # worse in a maximization objective
                         dominates = False
@@ -202,9 +246,10 @@ class MCTS:
     def choose(self, root_env=None):
         """Run MCTS and return best action from root node."""
         root_env = root_env or self.env
-        root = MCTSNode(parent=None, action=None, state=root_env)
-        root.cum_reward_vec = np.zeros(self.n_objectives)
-        root.utility_vec = np.zeros(self.n_objectives)
+        #root = MCTSNode(parent=None, macro_action=None, micro_action=None, env=root_env)
+        root = self.root
+        root.imm_reward_vec = np.zeros(self.n_objectives)
+        root.value_vec = np.zeros(self.n_objectives)
 
         for _ in range(self.n_simulations):
             env_copy = copy.deepcopy(root_env)
@@ -215,41 +260,50 @@ class MCTS:
             while node.is_fully_expanded() and node.children:
                 node = self._select(node)
                 # Step environment
-                next_obs, rewards, done, truncated, info = env_copy.step(node.action)
+                if node.macro_action == 0:
+                    next_obs, rewards, done, truncated, info = env_copy.search_env.env.step(node.micro_action) 
+                    _sync_envs(env_copy.search_env.env, env_copy.base_env)
+                    _sync_envs(env_copy.search_env.env, env_copy.track_env.env)
+                else:
+                    next_obs, rewards, done, truncated, info = env_copy.track_env.env.step(node.micro_action) 
+                    _sync_envs(env_copy.track_env.env, env_copy.base_env)
+                    _sync_envs(env_copy.track_env.env, env_copy.search_env.env)
+                
                 path.append(node)
                 if done or truncated:
                     break
 
             # Expansion
             if not node.is_fully_expanded():
-                child, _ = self._expand(node, env_copy)
+                child = self._expand(node, env_copy)
                 if child is not None:
                     node = child
                     path.append(node)
 
             # Rollout
-            reward_vec = self._rollout(env_copy, self.rollout_depth)
+            expanded_env = copy.deepcopy(child.env)
+            reward_vec = self._rollout(expanded_env, self.rollout_depth)
 
             # Backprop
             self._backprop(path, reward_vec)
 
         # Pick action with highest visit count
-        best_action = max(root.children.items(), key=lambda x: x[1].visit_count)[0]
-        return best_action
+        best_node = max(root.children.values(), key=lambda node: node.visit_count)
+        return best_node
     
     def reset_tree(self, obs):
         """Set up new root node for a fresh planning phase."""
-        self.root = MCTSNode(state=obs)
+        self.root = MCTSNode(env=obs)
 
-    def re_root(self, action):
+    def re_root(self, node):
         """Re-root the tree after taking `action`."""
-        if action in self.root.children:
-            new_root = self.root.children[action]
-            new_root.parent = None
-            return new_root
-        else:
-            # start a new tree if the branch wasn’t expanded
-            return MCTSNode(state=None)
+        for action, child in self.root.children.items():
+            if child is node:      # `is` is safer for identity matching
+                new_root = child
+                new_root.parent = None
+                return new_root
+        # start a new tree if the branch wasn’t expanded
+        return MCTSNode(env=None)
 
     def visualize_mcts_tree(self, root, max_depth=3, highlight_best=True):
         """
