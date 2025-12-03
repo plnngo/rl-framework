@@ -22,8 +22,8 @@ class MacroEnv(gym.Env):
     """
 
     def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0,
-                 d_state=4, fov_size=4.0, max_steps=300,
-                 search_agent=None, track_agent=None):
+                 d_state=4, fov_size=4.0, max_steps=100,
+                 search_agent=None, track_agent=None, seed=None):
         super().__init__()
 
         # --------------------
@@ -35,6 +35,7 @@ class MacroEnv(gym.Env):
                                        d_state=d_state,
                                        fov_size=fov_size,
                                        max_steps=max_steps,
+                                       seed=seed,
                                        mode="combined")
 
         # --------------------
@@ -65,9 +66,9 @@ class MacroEnv(gym.Env):
         self.track_env  = track_agent.get_env().envs[0]
 
     # ---------------------------------------------------------------------
-    def reset(self, **kwargs):
+    def reset(self, seeds):
         # Reset base environment first
-        obs, info = self.base_env.reset(**kwargs)
+        obs, info = self.base_env.reset(seed=int(np.random.choice(seeds)))
 
         real_search_env = unwrap_env(self.search_env)
         real_track_env  = unwrap_env(self.track_env)
