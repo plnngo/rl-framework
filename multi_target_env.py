@@ -81,7 +81,7 @@ class MultiTargetEnv(gym.Env):
         #self.reward_window_size = self.space_size / 2
         #self.reward_window_speed = self.velocity
 
-        self.reset()
+        self.reset(seed=seed)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -91,12 +91,19 @@ class MultiTargetEnv(gym.Env):
         self.n_unknown_targets = self.init_n_unknown_target
         self.lost_counter = 0
         self.detect_counter = 0
+
+        #reset dynamics
+        self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
+        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets) 
+
         self.targets = [self._init_target(i) for i in range(self.init_n_target)]
         self.unknown_targets = [
             self._init_unknown_target(i + self.init_n_target)
             for i in range(self.init_n_unknown_target)
         ]
         self.visit_counts[:] = 0   # reset search visit counts
+
+        
 
         # Initialize search memory variables here
         self.last_search_idx = None
@@ -216,25 +223,34 @@ class MultiTargetEnv(gym.Env):
             if target_id is not None and idx == target_id:
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R)
                 iG = compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
-                
+                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                #print(1-prob)
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
                 #total_iG = iG
-                lost = 1 - compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                
+                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                #print(1-prob)
+                prob_reward += prob
+                lost = 1 - prob
                 if lost>total_iG:
                     total_iG = lost_reward
 
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                if (1-prob)>total_iG:
+                #print(1-prob)
+                """ if (1-prob)>total_iG:
                     total_iG = 1-prob
-                prob_reward += prob
+                prob_reward += prob """
                 if prob<self.threshold_fov:
                     # target is considered as lost
                     lost_reward = lost_reward-0.25
                     lost_targets.append(tgt)
                     self._remove_lost_tracking_target(idx)
+                else:
+                    prob_reward += prob
+
 
         # propagate unknowns
         for utgt in self.unknown_targets:
@@ -266,12 +282,13 @@ class MultiTargetEnv(gym.Env):
             
             if self.n_targets<self.init_n_target:
                 reward = reward - 5 * (self.init_n_target-self.n_targets) """
-            if lost == total_iG:
+            """ if lost == total_iG:
                 reward = 1
             else:
                 reward = -1
             if self.n_targets == self.init_n_target:
-                reward += 1
+                reward += 1 """
+            reward = prob_reward
             # Termination
             done = self.step_count >= self.max_steps
             truncated = False
