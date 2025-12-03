@@ -68,6 +68,7 @@ class MacroRandomSeedEnv(gym.Env):
             n_unknown_targets=n_unknown_targets,
             search_agent=search_agent,
             track_agent=track_agent,
+            seed=seed
         )
 
     def reset(self, **kwargs):
