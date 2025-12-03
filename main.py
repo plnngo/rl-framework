@@ -633,7 +633,8 @@ def plot_violin(results_dict, ylabel="Episode Reward"):
         "PPO": "orange",
         "DQN": "green",
         "Random": "red",
-        "Det": "blue"
+        "Det": "blue",
+        "MCTS": "purple"
     }
     
     data = []
@@ -827,7 +828,7 @@ def plot_positions(positions, env=None, show_start_end=True):
     plt.show()
 
 @staticmethod
-def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom):
+def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, mcts, knownMcts):
     """
     ppo, dqn, random are lists of arrays.
     Compute:
@@ -845,26 +846,29 @@ def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom):
     means = np.array([
         np.mean([np.mean(arr) for arr in ppo]),
         np.mean([np.mean(arr) for arr in dqn]),
-        np.mean([np.mean(arr) for arr in random])
+        np.mean([np.mean(arr) for arr in random]),
+        np.mean([np.mean(arr) for arr in mcts])
     ])
 
     stds = np.array([
         np.std([np.mean(arr) for arr in ppo], ddof=1),
         np.std([np.mean(arr) for arr in dqn], ddof=1),
-        np.std([np.mean(arr) for arr in random], ddof=1)
+        np.std([np.mean(arr) for arr in random], ddof=1),
+        np.std([np.mean(arr) for arr in mcts], ddof=1)
     ])
 
     # --- Known means remain unchanged ---
     known_means = np.array([
         np.mean(knownPPO),
         np.mean(knownDQN),
-        np.mean(knownRandom)
+        np.mean(knownRandom),
+        np.mean(knownMcts)
     ])
 
     # --- Plotting ---
-    labels = ["PPO", "DQN", "Random"]
+    labels = ["PPO", "DQN", "Random", "MCTS"]
     x = np.arange(len(labels))
-    colors = ["blue", "orange", "green"]
+    colors = ["blue", "orange", "green", "purple"]
     light_colors = [to_rgba(c, alpha=0.35) for c in colors]
 
     plt.figure(figsize=(7, 5))
@@ -1116,7 +1120,7 @@ if __name__ == "__main__":
     seeds = [42, 123, 321]
 
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
-    n_episodes = 50
+    n_episodes = 2
 
     """ # ****** Search ******
     # ****** Random policy ******
