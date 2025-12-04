@@ -40,7 +40,7 @@ class RandomSeedEnv(gym.Env):
         self.env = MultiTargetEnv(
             n_targets=self.n_targets,
             n_unknown_targets=self.n_unknown_targets,
-            seed=np.random.choice(self.seed_list),
+            seed = int(np.random.choice(self.seed_list)),
             mode=self.mode,
         )
 
@@ -50,7 +50,7 @@ class RandomSeedEnv(gym.Env):
 
     def reset(self, **kwargs):
         # Recreate env with a new seed each reset
-        seed = np.random.choice(self.seed_list)
+        seed = int(np.random.choice(self.seed_list))
         self.env = MultiTargetEnv(
             n_targets=self.n_targets,
             n_unknown_targets=self.n_unknown_targets,
@@ -97,18 +97,19 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            gamma=0.9576075081024715,
-            learning_rate=0.00016587775102695835,
-            buffer_size=30000,
-            learning_starts=1000,
-            train_freq=1,
+            learning_rate=0.00010917134021893014,
+            buffer_size=20_000,
             batch_size=64,
-            target_update_interval=12000,
-            exploration_fraction=0.7893585250785973,
-            exploration_final_eps=0.09706959490521018,
+            gamma=0.965849106792237,
+            train_freq=4,
+            gradient_steps=8,
+            learning_starts=5000,
+            exploration_fraction=0.3908456292795791,
+            exploration_final_eps=0.05447874562759111,
+            target_update_interval=5_000,
+            max_grad_norm=1.058094230288445,
+            policy_kwargs=dict(net_arch=[256, 256]),
             verbose=1,
-            gradient_steps=4,
-            max_grad_norm=0.6395054936295579,
         )
     else:
         raise ValueError("Unknown algorithm")

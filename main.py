@@ -828,7 +828,7 @@ def plot_positions(positions, env=None, show_start_end=True):
     plt.show()
 
 @staticmethod
-def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, mcts, knownMcts):
+def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, mcts=[], knownMcts=[]):
     """
     ppo, dqn, random are lists of arrays.
     Compute:
@@ -866,7 +866,7 @@ def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, m
     ])
 
     # --- Plotting ---
-    labels = ["PPO", "DQN", "Random", "MCTS"]
+    labels = ["PPO", "Det", "Random", "MCTS"]
     x = np.arange(len(labels))
     colors = ["blue", "orange", "green", "purple"]
     light_colors = [to_rgba(c, alpha=0.35) for c in colors]
@@ -1194,7 +1194,7 @@ if __name__ == "__main__":
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
-    ppo_model = PPO.load("agents/ppo_track_trained", env=env)
+    ppo_model = PPO.load("agents/ppo_track_trainednoLearning", env=env)
     ppo_rewards, exceedFOV_ppo, last_env, last_episode_log = evaluate_agent_track(env, model=ppo_model, n_episodes=n_episodes, deterministic_policy=False)
     print(exceedFOV_ppo)
     """ visualize_initial_positions(last_env)

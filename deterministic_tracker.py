@@ -49,7 +49,7 @@ def select_best_action(env, dt=None):
         # 2. Perform the hypothetical EKF update (sensing action = choose idx)
         x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R)
 
-        # 3. Compute information gain (KL divergence)
+        # 3. Compute information gain (KL divergence)/ complementary probability
         ig = compute_kl_divergence(x_pred, P_pred, x_upd, P_upd)
         risk = 1-compute_fov_prob_single(env.fov_size, x_pred, P_pred)
 

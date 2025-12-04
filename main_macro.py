@@ -263,14 +263,14 @@ def plot_task_log(task_log, title="Action Timeline"):
 
 if __name__ == "__main__":
     seeds = [42, 123, 321]
-    n_episodes = 1
+    n_episodes = 100
     n_targets = 5
     n_unknown_targets =100
 
     envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
     mcts = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.95)
     rewardsMcts, detection_countMcts, detect_count3Mcts, exceedFOVMcts, last_envMcts, last_episode_logMcts, knownMcts, last_tasks_logMcts = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts, n_episodes=n_episodes, random_policy=True, n_targets=n_targets, n_unknown_targets=n_unknown_targets)
-    plot_pareto(detection_countMcts, exceedFOVMcts)
+    #plot_pareto(detection_countMcts, exceedFOVMcts)
 
     envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
     rewardsRandom, detection_countRandom, detect_count3Random, exceedFOVRandom, last_envRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom = evaluate_agent_macro(seeds=seeds, env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, n_targets=n_targets, n_unknown_targets=n_unknown_targets)
