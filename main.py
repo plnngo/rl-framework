@@ -409,15 +409,13 @@ def _unpack_cholesky(ch_pack, d):
             idx += 1
     return L
 
-def extract_target_state_cov(obs, target_idx, env):
+def extract_target_state_cov(target_idx, env):
     """
     Extract both the d-dimensional state vector and its corresponding dxd covariance
     matrix for a given target index from the flat observation vector `obs`.
 
     Parameters
     ----------
-    obs : np.ndarray
-        Flat observation vector returned by the environment.
     target_idx : int
         Index of the target to extract (0-based).
     env : MultiTargetEnv
@@ -430,15 +428,23 @@ def extract_target_state_cov(obs, target_idx, env):
     P : np.ndarray
         Covariance matrix of shape (d_state, d_state).
     """
-    per = env.obs_dim_per_target
+    """ per = env.obs_dim_per_target
     d = env.d_state
     start = int(target_idx * per)
 
     # Slice corresponding to this target
-    target_slice = obs[start:start + per]
+    target_slice = obs[start:start + per] """
 
+    x = None
+    P = None
     # Extract state vector (first d_state elements)
-    x = target_slice[:d].astype(float)
+    for tgt in env.targets:
+        if tgt["id"] == target_idx:
+            x = tgt["x"]
+            P = tgt["P"]
+            break
+
+    """ x = env.targets     target_slice[:d].astype(float)
 
     # Extract packed Cholesky (next cholesky_size elements)
     ch_pack = target_slice[d:d + env.cholesky_size].astype(float)
@@ -449,12 +455,12 @@ def extract_target_state_cov(obs, target_idx, env):
     else:
         L = _unpack_cholesky(ch_pack, d)
         P = L @ L.T
-        P = 0.5 * (P + P.T)  # ensure symmetry
+        P = 0.5 * (P + P.T)  # ensure symmetry """
 
     return x, P
 
 @staticmethod
-def analyse_tracking_task(obs, target_idx, env, confidence=0.95):
+def analyse_tracking_task(target_idx, env, confidence=0.95):
     """
     Test whether the 2D positional covariance (first two state dims) for target
     exceeds the env.fov_size.
@@ -478,7 +484,9 @@ def analyse_tracking_task(obs, target_idx, env, confidence=0.95):
     if mask_val <= 0.5:
         return True, None, None """
 
-    x, P = extract_target_state_cov(obs, target_idx, env)
+    x, P = extract_target_state_cov(target_idx, env)
+    if x is None:
+        return False, None , None
     # positional covariance assumed to be in state dims [0,1] (x,y)
     posP = P[:2, :2]
 
@@ -551,7 +559,7 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
 
             if ep == n_episodes - 1:
                 for tgt in range(env.n_targets):
-                    exceed, x, P = analyse_tracking_task(obs, tgt, env, confidence=0.95)
+                    exceed, x, P = analyse_tracking_task(tgt, env, confidence=0.95)
                     """ if exceed and tgt not in exceed_target:
                         exceed_target.append(tgt) """
 
@@ -828,7 +836,7 @@ def plot_positions(positions, env=None, show_start_end=True):
     plt.show()
 
 @staticmethod
-def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, mcts=[], knownMcts=[]):
+def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, det=[], knowndet=[]):
     """
     ppo, dqn, random are lists of arrays.
     Compute:
@@ -847,14 +855,14 @@ def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, m
         np.mean([np.mean(arr) for arr in ppo]),
         np.mean([np.mean(arr) for arr in dqn]),
         np.mean([np.mean(arr) for arr in random]),
-        np.mean([np.mean(arr) for arr in mcts])
+        np.mean([np.mean(arr) for arr in det])
     ])
 
     stds = np.array([
         np.std([np.mean(arr) for arr in ppo], ddof=1),
         np.std([np.mean(arr) for arr in dqn], ddof=1),
         np.std([np.mean(arr) for arr in random], ddof=1),
-        np.std([np.mean(arr) for arr in mcts], ddof=1)
+        np.std([np.mean(arr) for arr in det], ddof=1)
     ])
 
     # --- Known means remain unchanged ---
@@ -862,11 +870,11 @@ def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, m
         np.mean(knownPPO),
         np.mean(knownDQN),
         np.mean(knownRandom),
-        np.mean(knownMcts)
+        np.mean(knowndet)
     ])
 
     # --- Plotting ---
-    labels = ["PPO", "Det", "Random", "MCTS"]
+    labels = ["PPO", "DQN", "Random", "Heuristic"]
     x = np.arange(len(labels))
     colors = ["blue", "orange", "green", "purple"]
     light_colors = [to_rgba(c, alpha=0.35) for c in colors]
@@ -1120,7 +1128,7 @@ if __name__ == "__main__":
     seeds = [42, 123, 321]
 
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
-    n_episodes = 2
+    n_episodes = 50
 
     """ # ****** Search ******
     # ****** Random policy ******
@@ -1194,7 +1202,7 @@ if __name__ == "__main__":
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
-    ppo_model = PPO.load("agents/ppo_track_trainednoLearning", env=env)
+    ppo_model = PPO.load("agents/ppo_track_trained_onlyTracesObsVec", env=env)
     ppo_rewards, exceedFOV_ppo, last_env, last_episode_log = evaluate_agent_track(env, model=ppo_model, n_episodes=n_episodes, deterministic_policy=False)
     print(exceedFOV_ppo)
     """ visualize_initial_positions(last_env)
@@ -1215,11 +1223,11 @@ if __name__ == "__main__":
  
 
     # ****** DQN agent ******
-    """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     obs = env.reset()
-    dqn_model = DQN.load("agents/dqn_track_trained", env=env)
+    dqn_model = DQN.load("agents/dqn_track_trained_trial6", env=env)
     dqn_rewards, exceedFOV_dqn, last_env, last_episode_log = evaluate_agent_track(env, model=dqn_model, n_episodes=n_episodes)
-    print(exceedFOV_dqn) """
+    print(exceedFOV_dqn)
     """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
     tracks = extract_tracks_from_log(last_episode_log)
@@ -1241,11 +1249,12 @@ if __name__ == "__main__":
     reward_results = {
         "Random": random_rewards,
         "PPO": ppo_rewards,
-        "Det": det_rewards
+        "Det": det_rewards,
+        "DQN" : dqn_rewards
     }
     plot_violin(reward_results, ylabel="Episode Reward")
-    exceedFOV_dqn = [5]
-    plot_means_lost_targets(exceedFOV_ppo, n_targets, exceedFOV_det, n_targets, exceedFOV_random, n_targets)
+    #exceedFOV_dqn = [5]
+    plot_means_lost_targets(exceedFOV_ppo, n_targets, exceedFOV_dqn, n_targets, exceedFOV_random, n_targets, exceedFOV_det, n_targets)
 
  
 
