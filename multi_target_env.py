@@ -59,6 +59,16 @@ class MultiTargetEnv(gym.Env):
         obs_len = self.max_targets * self.obs_dim_per_target + self.max_targets
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf,
                                                 shape=(obs_len,), dtype=np.float32)
+        # New per-target dimension:
+        if mode == "track":
+            self.obs_dim_per_target = 1   # dx, dy, vx, vy, p_fov, known_mask
+            obs_len = self.init_n_target * self.obs_dim_per_target
+        self.observation_space = gym.spaces.Box(
+            low=-1.0, 
+            high=1.0,
+            shape=(obs_len,),
+            dtype=np.float32
+        )
 
         # ACTION space (flat form)
         if self.mode == "search":
@@ -103,8 +113,6 @@ class MultiTargetEnv(gym.Env):
         ]
         self.visit_counts[:] = 0   # reset search visit counts
 
-        
-
         # Initialize search memory variables here
         self.last_search_idx = None
         self.prev_search_pos = None
@@ -113,7 +121,10 @@ class MultiTargetEnv(gym.Env):
         self.known_mask = np.zeros(self.max_targets, dtype=bool)
         self.known_mask[:self.n_targets] = True
 
-        self.obs = self._get_obs()
+        if self.mode=="track":
+            self.obs = np.full(5, -1e9, dtype=np.float32)
+        else:
+            self.obs = self._get_obs()
         info = {}  # optional
         return self.obs, info
     
@@ -265,7 +276,7 @@ class MultiTargetEnv(gym.Env):
         # If TRACK macro, return here            
         if target_id is not None:       
             # Construct next observation
-            obs = self._get_obs()
+            obs = self._get_obs(target_id)
             self.step_count += 1
 
             # Check validity
@@ -369,7 +380,7 @@ class MultiTargetEnv(gym.Env):
         pos0 = np.array([x0_left, y0])
         vel0 = np.array([self.motion_params[target_id], 0.0])
         x0 = np.concatenate([pos0, vel0])
-        covMultiplier = [1.0, 5.0, 10.0]
+        covMultiplier = [0.2, 0.5, 1.0]
         P0 = self.P0.copy() * np.random.choice(covMultiplier)
 
         Q = np.eye(self.d_state) * 0.
@@ -407,16 +418,44 @@ class MultiTargetEnv(gym.Env):
         }
         return mask
 
-    def _get_obs(self):
+    def _get_obs(self, target_id=None):
         """Flatten all target states and covariances into one observation vector."""
-        all_targets = self.targets + self.unknown_targets
-        obs = []
-        for tgt in all_targets:
-            obs.append(np.concatenate([tgt['x'], tgt['P'][np.tril_indices(self.d_state)]]))
-        obs_vec = np.concatenate(obs)
-        mask_vec = self.known_mask.astype(np.float32)
-        output = np.concatenate([obs_vec, mask_vec])
-        return output
+        if self.mode=="search":
+            all_targets = self.targets + self.unknown_targets
+            obs = []
+            for tgt in all_targets:
+                obs.append(np.concatenate([tgt['x'], tgt['P'][np.tril_indices(self.d_state)]]))
+            obs_vec = np.concatenate(obs)
+            mask_vec = self.known_mask.astype(np.float32)
+            output = np.concatenate([obs_vec, mask_vec])
+            return output
+
+        """Return a compact, RL-friendly observation vector."""
+        all_targets = [] 
+        for i in range(self.init_n_target):
+            for tgt_known in self.targets:
+                if tgt_known["id"] == i:
+                    all_targets.append(tgt_known)
+                    break
+            for tgt_unknown in self.unknown_targets:
+                if tgt_unknown["id"] == i:
+                    all_targets.append(tgt_unknown)
+                    break
+
+            
+        obs_list = []
+
+        for i, tgt in enumerate(all_targets):
+            x, y, vx, vy = tgt["x"]
+            trace = np.trace(tgt["P"])
+
+            p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
+
+            known = 1.0 if self.known_mask[tgt["id"]] else 0.0
+
+            obs_list.extend([trace])
+
+        return np.array(obs_list, dtype=np.float32)
         
     def sample_track_action(self):
         """Sample a valid tracking action from currently known targets."""
