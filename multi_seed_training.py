@@ -15,7 +15,7 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 15_000
+total_timesteps = 50_000
 mode = "track"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
@@ -28,7 +28,7 @@ class RandomSeedEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, seed_list, mode="search", n_targets=5, n_unknown_targets=100):
+    def __init__(self, seed_list, mode="track", n_targets=5, n_unknown_targets=100):
         super().__init__()
 
         self.seed_list = seed_list
@@ -57,7 +57,7 @@ class RandomSeedEnv(gym.Env):
             seed=seed,
             mode=self.mode,
         )
-        return self.env.reset(**kwargs)
+        return self.env.reset(seed=seed)
 
     def step(self, action):
         return self.env.step(action)
@@ -97,17 +97,17 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            learning_rate=0.00010917134021893014,
-            buffer_size=20_000,
-            batch_size=64,
-            gamma=0.965849106792237,
-            train_freq=4,
-            gradient_steps=8,
+            learning_rate=0.00010685084135079141,
+            buffer_size=30000,
+            batch_size=32,
+            gamma=0.9001853852142295,
+            train_freq=1,
+            gradient_steps=4,
             learning_starts=5000,
-            exploration_fraction=0.3908456292795791,
-            exploration_final_eps=0.05447874562759111,
-            target_update_interval=5_000,
-            max_grad_norm=1.058094230288445,
+            exploration_fraction=0.7398965813587768,
+            exploration_final_eps=0.03683504126497514,
+            target_update_interval=8000,
+            max_grad_norm=0.2673890378339314,
             policy_kwargs=dict(net_arch=[256, 256]),
             verbose=1,
         )
@@ -183,14 +183,14 @@ def main():
     shared_plotter = SharedLivePlot("Agent Comparison")
 
     # PPO
-    color_ppo = cm.get_cmap("tab10")(0)
+    """ color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir) """
 
     # DQN
-    """ color_dqn = cm.get_cmap("tab10")(1)
+    color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir) """
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)
