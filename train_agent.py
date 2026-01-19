@@ -77,9 +77,15 @@ class LivePlotCallback(BaseCallback):
             # Regular episodic update
             if done:
                 self.plotter.update(self.name, self.current_episode_reward, self.current_episode_length)
+                """ if 490 <= self.current_episode_reward <= 500:
+                        self.plotter.update(
+                            self.name,
+                            self.current_episode_reward,
+                            self.current_episode_length
+                        ) """
                 self.current_episode_reward = 0
                 self.current_episode_length = 0
-
+                
 
         return True
 
