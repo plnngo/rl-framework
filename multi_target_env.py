@@ -72,7 +72,8 @@ class MultiTargetEnv(gym.Env):
         # New per-target dimension:
         if mode == "track":
             self.obs_dim_per_target = 1   # dx, dy, vx, vy, p_fov, known_mask
-            obs_len = self.init_n_target * self.obs_dim_per_target
+            #obs_len = self.init_n_target * self.obs_dim_per_target
+            obs_len = self.max_targets * self.obs_dim_per_target
             self.observation_space = gym.spaces.Box(
                 low=-1.0, 
                 high=1.0,
@@ -86,7 +87,8 @@ class MultiTargetEnv(gym.Env):
             self.n_actions = self.n_grid_cells
         elif self.mode == "track":
             # Only track actions (one per known target)
-            self.n_actions = self.n_targets
+            #self.n_actions = self.n_targets
+            self.n_actions = self.max_targets
         else:  # "combined"
             # Full range: all search + all track
             self.n_actions = self.n_grid_cells + self.max_targets
@@ -455,8 +457,8 @@ class MultiTargetEnv(gym.Env):
             return output """
 
         """Return a compact, RL-observation vector."""
-        all_targets = [] 
-        for i in range(self.init_n_target):
+        """ all_targets = [] 
+        for i in range(self.max_targets):
             for tgt_known in self.targets:
                 if tgt_known["id"] == i:
                     all_targets.append(tgt_known)
@@ -464,7 +466,11 @@ class MultiTargetEnv(gym.Env):
             for tgt_unknown in self.unknown_targets:
                 if tgt_unknown["id"] == i:
                     all_targets.append(tgt_unknown)
-                    break
+                    break """
+        by_id = {t["id"]: t for t in self.targets}
+        by_id.update({t["id"]: t for t in self.unknown_targets})
+
+        all_targets = [by_id[k] for k in sorted(by_id)]
 
             
         obs_list = []
@@ -477,7 +483,7 @@ class MultiTargetEnv(gym.Env):
 
             known = 1.0 if self.known_mask[tgt["id"]] else 0.0
 
-            obs_list.extend([trace])
+            obs_list.extend([trace * known])
 
         return np.array(obs_list, dtype=np.float32)
         
@@ -588,6 +594,9 @@ class MultiTargetEnv(gym.Env):
         """
         Build 4x4 F for state ordering [x, y, vx, vy].
         """
+
+        #modify omega to increase radius of targets
+        omega = omega / 10
         wdt = omega * dt
         # handle small w via stable evaluations:
         if abs(wdt) < 1e-8:
