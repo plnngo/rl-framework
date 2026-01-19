@@ -544,6 +544,7 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
             # --- Choose action ---
             if random_policy:
                 action = env.action_space.sample()
+                #action = 6
             elif deterministic_policy:
                 action, best_ig, best_update = select_best_action(env, env.dt)
             else:
@@ -638,10 +639,10 @@ def plot_violin(results_dict, ylabel="Episode Reward"):
     Plots a violin plot comparing metrics (e.g., rewards or detections) across agents.
     """
     colors = {
-        "PPO": "orange",
-        "DQN": "green",
+        "PPO": "blue",
+        "DQN": "orange",
         "Random": "red",
-        "Det": "blue",
+        "Heuristic": "green",
         "MCTS": "purple"
     }
     
@@ -836,7 +837,7 @@ def plot_positions(positions, env=None, show_start_end=True):
     plt.show()
 
 @staticmethod
-def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, det=[], knowndet=[]):
+def plot_means_lost_targets(ppo, knownPPO, dqn = [], knownDQN =[], random=[], knownRandom =[], det=[], knowndet=[]):
     """
     ppo, dqn, random are lists of arrays.
     Compute:
@@ -876,7 +877,7 @@ def plot_means_lost_targets(ppo, knownPPO, dqn, knownDQN, random, knownRandom, d
     # --- Plotting ---
     labels = ["PPO", "DQN", "Random", "Heuristic"]
     x = np.arange(len(labels))
-    colors = ["blue", "orange", "green", "purple"]
+    colors = ["blue", "orange", "red", "green"]
     light_colors = [to_rgba(c, alpha=0.35) for c in colors]
 
     plt.figure(figsize=(7, 5))
@@ -1106,7 +1107,7 @@ if __name__ == "__main__":
 
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
-    visualize_initial_positions(env)
+    #visualize_initial_positions(env)
 
     # Run random policy
     #positions, covariances = run_random_policy_search(env, n_steps=10)
@@ -1128,7 +1129,7 @@ if __name__ == "__main__":
     seeds = [42, 123, 321]
 
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
-    n_episodes = 50
+    n_episodes = 100
 
     """ # ****** Search ******
     # ****** Random policy ******
@@ -1182,8 +1183,8 @@ if __name__ == "__main__":
     obs = env.reset()
     random_rewards, exceedFOV_random, last_env, last_episode_log = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
     print(exceedFOV_random)
-    """ visualize_initial_positions(last_env)
-    print(last_env.motion_model) """
+    visualize_initial_positions(last_env)
+    #print(last_env.motion_model)
     """ tracks = extract_tracks_from_log(last_episode_log)
     estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
@@ -1202,7 +1203,9 @@ if __name__ == "__main__":
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
-    ppo_model = PPO.load("agents/ppo_track_trained_onlyTracesObsVec", env=env)
+    #ppo_model = PPO.load("agents/ppo_track_trained", env=env)
+    ppo_model = PPO.load("agents/ppo_track_trained_IEEE", env=env)
+
     ppo_rewards, exceedFOV_ppo, last_env, last_episode_log = evaluate_agent_track(env, model=ppo_model, n_episodes=n_episodes, deterministic_policy=False)
     print(exceedFOV_ppo)
     """ visualize_initial_positions(last_env)
@@ -1225,7 +1228,9 @@ if __name__ == "__main__":
     # ****** DQN agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     obs = env.reset()
-    dqn_model = DQN.load("agents/dqn_track_trained_trial6", env=env)
+    #dqn_model = DQN.load("agents/dqn_track_trained", env=env)
+    dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
+
     dqn_rewards, exceedFOV_dqn, last_env, last_episode_log = evaluate_agent_track(env, model=dqn_model, n_episodes=n_episodes)
     print(exceedFOV_dqn)
     """ visualize_initial_positions(last_env)
@@ -1249,7 +1254,7 @@ if __name__ == "__main__":
     reward_results = {
         "Random": random_rewards,
         "PPO": ppo_rewards,
-        "Det": det_rewards,
+        "Heuristic": det_rewards,
         "DQN" : dqn_rewards
     }
     plot_violin(reward_results, ylabel="Episode Reward")
