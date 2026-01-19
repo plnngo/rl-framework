@@ -15,8 +15,8 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 50_000
-mode = "track"
+total_timesteps = 60_000
+mode = "search"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -80,16 +80,16 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = PPO(
             "MlpPolicy",
             env,
-            gamma=0.9, #0.9158906517459942, #0.9790210247139031,   
-            n_steps=128, #1024,
-            ent_coef=0.005, #0.0013392533378982774, #0.03158387252345037, 
-            learning_rate=0.0003, #0.0006609120604125945,    #0.0007266996909845838,   
-            vf_coef=0.5, #0.3088596031455526, #0.8349958665992091, 
-            max_grad_norm=1.0, #0.3693696658724082, #0.7926595046318459,   
-            gae_lambda=0.8, #0.9572736445545191, #0.886078389184115,  
+            gamma=0.9, #0.9951316261625073, #0.9158906517459942, #0.9790210247139031,   
+            n_steps=128, #512, #1024,
+            ent_coef=0.005, #0.04145091999215972, #0.0013392533378982774, #0.03158387252345037, 
+            learning_rate=0.0003, #5.5104886882390796e-05, #0.0003, #0.0006609120604125945,    #0.0007266996909845838,   
+            vf_coef=0.5, #0.58944318346072, #0.3088596031455526, #0.8349958665992091, 
+            max_grad_norm=1.0, #0.40904524719654467, #0.3693696658724082, #0.7926595046318459,   
+            gae_lambda=0.8, #0.9190087075813886, #0.9572736445545191, #0.886078389184115,  
             n_epochs=10,
-            clip_range=0.5, #0.3890633888493019, #0.38403499436025856,  
-            batch_size=256, #128, #256,
+            clip_range=0.5, #0.32790623385659234, #0.3890633888493019, #0.38403499436025856,  
+            batch_size=256, #32, #64, #128,
             verbose=1,
         )
 
@@ -97,18 +97,18 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            learning_rate=0.00010685084135079141,
-            buffer_size=30000,
-            batch_size=32,
-            gamma=0.9001853852142295,
-            train_freq=1,
-            gradient_steps=4,
-            learning_starts=5000,
-            exploration_fraction=0.7398965813587768,
-            exploration_final_eps=0.03683504126497514,
-            target_update_interval=8000,
-            max_grad_norm=0.2673890378339314,
-            policy_kwargs=dict(net_arch=[256, 256]),
+            learning_rate= 0.00034674195012021614, #0.00010077055018104607, #0.00016587775102695835, #0.00010685084135079141,
+            buffer_size=30000, #30000,
+            batch_size=32, #64, #32,
+            gamma=0.9578429379766629, #0.9296592176892341, #0.9576075081024715, #0.9001853852142295,
+            train_freq=4, #4, #1,
+            gradient_steps=4, #4,
+            learning_starts=10000, #5000, #1000, #5000,
+            exploration_fraction= 0.5207217410900746, #0.5742209831043317, #0.7893585250785973, #0.7398965813587768,
+            exploration_final_eps= 0.08327658175267656, #0.03548013259170907, #0.09706959490521018, #0.03683504126497514,
+            target_update_interval=8000, #12000,
+            max_grad_norm= 0.7279834488656272, #1.3411398428359127, #0.6395054936295579, #0.2673890378339314,
+            policy_kwargs=dict(net_arch=[256, 256]), #128, 128
             verbose=1,
         )
     else:
@@ -126,7 +126,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     model.learn(total_timesteps=total_timesteps, callback=callback)
 
     # Save model
-    model_path = os.path.join(save_dir, f"{algo_name.lower()}_{mode}_trained.zip")
+    model_path = os.path.join(save_dir, f"{algo_name.lower()}_{mode}_trained_IEEE.zip")
     model.save(model_path)
     print(f"[{algo_name}] Model saved to {model_path}")
 
@@ -158,7 +158,13 @@ def run_random_policy(plotter, color, total_timesteps, save_dir):
         if done or truncated:
             rewards_list.append(current_episode_reward)
             timesteps_list.append(cumulative_timesteps)
-            plotter.update("Random", current_episode_reward, current_episode_length)
+            #plotter.update("Random", current_episode_reward, current_episode_length)
+            if 490 <= current_episode_reward <= 500:
+                        plotter.update(
+                            "Random",
+                            current_episode_reward,
+                            current_episode_length
+                        )
 
             current_episode_reward = 0
             current_episode_length = 0
@@ -180,12 +186,12 @@ def run_random_policy(plotter, color, total_timesteps, save_dir):
 
 def main():
     np.random.seed(0)
-    shared_plotter = SharedLivePlot("Agent Comparison")
+    shared_plotter = SharedLivePlot("Agent comparison during training")
 
     # PPO
-    """ color_ppo = cm.get_cmap("tab10")(0)
+    color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir) """
+    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
@@ -194,7 +200,7 @@ def main():
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)
-    run_random_policy(shared_plotter, color_rand, total_timesteps, save_dir)
+    #run_random_policy(shared_plotter, color_rand, total_timesteps, save_dir)
 
     # Finalize plot
     shared_plotter.finalize()
