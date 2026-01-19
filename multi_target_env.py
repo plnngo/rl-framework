@@ -38,9 +38,9 @@ class MultiTargetEnv(gym.Env):
         self.max_targets = self.init_n_target + self.init_n_unknown_target
 
         # Default initial covariance for new tracks (make accessible as self.P0)
-        self.P0 = np.eye(self.d_state) * 0.1
-        self.P0[-2:, -2:] = np.eye(2) * 0.01
-        self.Q0 = np.eye(self.d_state) * 0.0
+        self.P0 = np.eye(self.d_state) * 0.2
+        self.P0[-2:, -2:] = np.eye(2) * 0.05
+        self.Q0 = np.eye(self.d_state) * 1e-1
 
         # Discretising entire field 
         n_grid = max(1, int(np.floor(self.space_size / self.fov_size)))
@@ -55,20 +55,30 @@ class MultiTargetEnv(gym.Env):
         self.grid_coords = np.array([[x, y] for x in x_vals for y in y_vals])
         self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)
 
-        # OBSERVATION: all targets (max_targets) * per-target obs + mask_length
+        """ # OBSERVATION: all targets (max_targets) * per-target obs + mask_length
         obs_len = self.max_targets * self.obs_dim_per_target + self.max_targets
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf,
-                                                shape=(obs_len,), dtype=np.float32)
+                                                shape=(obs_len,), dtype=np.float32) """
+        if mode == "search":
+            # Observation is just visit counts
+            obs_len = self.n_grid_cells
+            self.observation_space = gym.spaces.Box(
+                low=0,
+                high=np.inf,
+                shape=(obs_len,),
+                dtype=np.float32
+            )
+
         # New per-target dimension:
         if mode == "track":
             self.obs_dim_per_target = 1   # dx, dy, vx, vy, p_fov, known_mask
             obs_len = self.init_n_target * self.obs_dim_per_target
-        self.observation_space = gym.spaces.Box(
-            low=-1.0, 
-            high=1.0,
-            shape=(obs_len,),
-            dtype=np.float32
-        )
+            self.observation_space = gym.spaces.Box(
+                low=-1.0, 
+                high=1.0,
+                shape=(obs_len,),
+                dtype=np.float32
+            )
 
         # ACTION space (flat form)
         if self.mode == "search":
@@ -86,10 +96,6 @@ class MultiTargetEnv(gym.Env):
         # known mask
         self.known_mask = np.zeros(self.max_targets, dtype=bool)
         self.known_mask[:self.n_targets] = True
-
-        # reward window
-        #self.reward_window_size = self.space_size / 2
-        #self.reward_window_speed = self.velocity
 
         self.reset(seed=seed)
 
@@ -121,10 +127,10 @@ class MultiTargetEnv(gym.Env):
         self.known_mask = np.zeros(self.max_targets, dtype=bool)
         self.known_mask[:self.n_targets] = True
 
-        if self.mode=="track":
+        """ if self.mode=="track":
             self.obs = np.full(5, -1e9, dtype=np.float32)
-        else:
-            self.obs = self._get_obs()
+        else: """
+        self.obs = self._get_obs()
         info = {}  # optional
         return self.obs, info
     
@@ -202,12 +208,12 @@ class MultiTargetEnv(gym.Env):
         lost = 0
         lost_targets = []
 
-        """ # --- Catastrophic failure: a target was lost ---
-        if self.n_targets < self.init_n_target:
+        # --- Catastrophic failure: a target was lost ---
+        """ if self.n_targets < self.init_n_target:
             obs = self._get_obs()
             self.step_count += 1
 
-            reward = -1.0    # choose appropriate magnitude
+            reward = -1.0   
             done = True
             truncated = False
 
@@ -282,8 +288,10 @@ class MultiTargetEnv(gym.Env):
             # Check validity
             if not self.known_mask[target_id]:
                 # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
-                info = {"invalid_action": True, "action_mask": self.get_action_mask()}
-                return obs, -1.0, False, False, info
+                info = {"invalid_action": True, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
+                # Termination
+                done = self.step_count >= self.max_steps
+                return obs, -1.0, done, False, info
 
             # Simple reward = total information gain (KL) or punishment for loosing target
             """ if lost_reward<0:
@@ -314,12 +322,27 @@ class MultiTargetEnv(gym.Env):
         detections = []
         fov_halfWidth = self.fov_size / 2.0
         for obj in self.targets + self.unknown_targets:
-            if search_pos is None:
-                print("Searching Objective was selected but search position is null")
-            dx = obj['x'][0] - search_pos[0]
-            dy = obj['x'][1] - search_pos[1]
-            if abs(dx) <= fov_halfWidth and abs(dy) <= fov_halfWidth:
-                detections.append(obj)
+
+            try:
+                dx = obj['x'][0] - search_pos[0]
+                dy = obj['x'][1] - search_pos[1]
+                if abs(dx) <= fov_halfWidth and abs(dy) <= fov_halfWidth:
+                    detections.append(obj)
+            except Exception as e:
+                # Catch internal failure
+                obs = self._get_obs() if hasattr(self, "_get_obs") else self.observation_space.sample()
+
+                reward = -100.0  # strong penalty for failure
+                terminated = True
+                truncated = False
+
+                info = {
+                    "exception": str(e),
+                    "exception_type": type(e).__name__,
+                }
+
+                return obs, reward, terminated, truncated, info
+
 
         # Compute reward
         if len(detections) > 0:
@@ -380,7 +403,7 @@ class MultiTargetEnv(gym.Env):
         pos0 = np.array([x0_left, y0])
         vel0 = np.array([self.motion_params[target_id], 0.0])
         x0 = np.concatenate([pos0, vel0])
-        covMultiplier = [0.2, 0.5, 1.0]
+        covMultiplier = [0.7, 0.75, 0.85, 1.0]
         P0 = self.P0.copy() * np.random.choice(covMultiplier)
 
         Q = np.eye(self.d_state) * 0.
@@ -421,16 +444,17 @@ class MultiTargetEnv(gym.Env):
     def _get_obs(self, target_id=None):
         """Flatten all target states and covariances into one observation vector."""
         if self.mode=="search":
-            all_targets = self.targets + self.unknown_targets
+            return self.visit_counts.astype(np.float32)
+            """ all_targets = self.targets + self.unknown_targets
             obs = []
             for tgt in all_targets:
                 obs.append(np.concatenate([tgt['x'], tgt['P'][np.tril_indices(self.d_state)]]))
             obs_vec = np.concatenate(obs)
             mask_vec = self.known_mask.astype(np.float32)
             output = np.concatenate([obs_vec, mask_vec])
-            return output
+            return output """
 
-        """Return a compact, RL-friendly observation vector."""
+        """Return a compact, RL-observation vector."""
         all_targets = [] 
         for i in range(self.init_n_target):
             for tgt_known in self.targets:
