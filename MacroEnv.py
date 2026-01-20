@@ -29,14 +29,14 @@ class MacroEnv(gym.Env):
         # --------------------
         # Base environment (combined mode)
         # --------------------
-        self.base_env = MultiTargetEnv(n_targets=n_targets,
+        """ self.base_env = MultiTargetEnv(n_targets=n_targets,
                                        n_unknown_targets=n_unknown_targets,
                                        space_size=space_size,
                                        d_state=d_state,
                                        fov_size=fov_size,
                                        max_steps=max_steps,
                                        seed=seed,
-                                       mode="combined")
+                                       mode="track") """
 
         # --------------------
         # Micro agents (provided externally)
@@ -47,18 +47,39 @@ class MacroEnv(gym.Env):
         # --------------------
         # Macro action/observation space
         # --------------------
+        self.rng = np.random.default_rng(seed)
         self.action_space = gym.spaces.Discrete(2)  # 0=search, 1=track
-        self.observation_space = self.base_env.observation_space
-        self.fov_size = fov_size
+        self.obs_dim_per_target = 1   # trace of covariance
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
-        self.threshold_fov = 0.5
-        self.tracking_requested = 0.7
+        self.max_targets = self.init_n_targets + self.init_n_unknown_targets
+        
+        obs_len = self.max_targets * self.obs_dim_per_target
+        self.observation_space = gym.spaces.Box(
+            low=-1.0, 
+            high=1.0,
+            shape=(obs_len,),
+            dtype=np.float32
+        )
+        self.fov_size = fov_size
+        self.threshold_fov = 0.7
+        self.tracking_requested = 0.8
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
         self.lost_counter = 0
         self.detect_counter = 0
-
+        self.space_size = space_size
+        self.d_state = d_state  # state dimension per target (e.g., x,y,vx,vy)
+        self.max_steps = max_steps
+        # Parameters related to dynamical motion
+        self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
+        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets)          # contains either linear velocity or turn rate
+        self.P0 = np.eye(self.d_state) * 0.2
+        self.P0[-2:, -2:] = np.eye(2) * 0.05
+        self.Q0 = np.eye(self.d_state) * 1e-1
+        n_grid = max(1, int(np.floor(self.space_size / self.fov_size)))
+        self.n_grid_cells = n_grid * n_grid
+        self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)
         # --------------------
         # Micro environments (created internally)
         # --------------------
@@ -66,18 +87,100 @@ class MacroEnv(gym.Env):
         self.track_env  = track_agent.get_env().envs[0]
 
     # ---------------------------------------------------------------------
-    def reset(self, seeds):
-        # Reset base environment first
-        obs, info = self.base_env.reset(seed=int(np.random.choice(seeds)))
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
 
+        self.step_count = 0
+        self.n_targets = self.init_n_targets
+        self.n_unknown_targets = self.init_n_unknown_targets
+        self.lost_counter = 0
+        self.detect_counter = 0
+
+        #reset dynamics
+        self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
+        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets) 
+
+        self.targets = [self._init_target(i) for i in range(self.init_n_targets)]
+        self.unknown_targets = [
+            self._init_unknown_target(i + self.init_n_targets)
+            for i in range(self.init_n_unknown_targets)
+        ]
+        self.visit_counts[:] = 0   # reset search visit counts
+
+        # Initialize search memory variables here
+        self.last_search_idx = None
+        self.prev_search_pos = None
+
+        # known mask
+        self.known_mask = np.zeros(self.max_targets, dtype=bool)
+        self.known_mask[:self.n_targets] = True
+
+        # Reset base environment first
+        #obs, info = self.base_env.reset(seed=seed)
+        
         real_search_env = unwrap_env(self.search_env)
         real_track_env  = unwrap_env(self.track_env)
 
         # Sync micro environments to match base_env
-        _sync_envs(self.base_env, real_search_env)
-        _sync_envs(self.base_env, real_track_env)
+        _sync_envs(self, real_search_env)
+        _sync_envs(self, real_track_env)
 
-        return obs, info
+        self.obs = self._get_obs()
+        info = {}
+
+        return self.obs, info
+    
+    def _init_target(self, target_id,  y_range=None):
+        """Initialize target with random position in left half and fixed velocity."""
+        if y_range is None:
+            y_low, y_high = -self.space_size/2, self.space_size/2
+        else:
+            y_low, y_high = y_range
+
+        # Sample x exclusively in left half: [-space_size/2, 0)
+        x0_left = self.rng.uniform(-self.space_size/2, 0)
+        y0 = self.rng.uniform(y_low, y_high)
+
+        pos0 = np.array([x0_left, y0])
+        vel0 = np.array([self.motion_params[target_id], 0.0])
+        x0 = np.concatenate([pos0, vel0])
+        covMultiplier = [0.7, 0.75, 0.85, 1.0]
+        P0 = self.P0.copy() * np.random.choice(covMultiplier)
+
+        Q = np.eye(self.d_state) * 0.
+        return {"id": target_id, "x": x0, "P": P0, "Q": Q}
+    
+    def _init_unknown_target(self, target_id, x_range=None, y_range=None):
+        if x_range is None:
+            # Left half of the field
+            x_low, x_high = -self.space_size/2, 0
+        else:
+            x_low, x_high = x_range
+        if y_range is None:
+            # Upper half of the field
+            y_low, y_high = 0, self.space_size/2
+        else:
+            y_low, y_high = y_range
+
+        x0 = self.rng.uniform(x_low, x_high)
+        y0 = self.rng.uniform(y_low, y_high)
+        pos0 = np.array([x0, y0])
+        vel0 = np.array([1.0, 0.0])         # velocity for CT model
+        if self.motion_model[target_id] == "L":
+            vel0 = np.array([self.motion_params[target_id], 0.0])  # move rightward
+        x0_full = np.concatenate([pos0, vel0])
+        P0 = self.P0.copy()
+        Q = np.eye(self.d_state) * 0.0
+        return {"id": target_id, "x": x0_full, "P": P0, "Q": Q}
+    
+    def get_action_mask(self):
+        """Return dictionary of valid discrete actions."""
+        mask = {
+            #"macro": np.ones(2, dtype=bool),  # always can choose search or track
+            #"micro_search": np.ones(self.n_grid_cells, dtype=bool),  # all grid cells valid
+            "micro_track": self.known_mask.copy()  # only known targets valid
+        }
+        return mask
 
     # ---------------------------------------------------------------------
 
@@ -91,63 +194,121 @@ class MacroEnv(gym.Env):
         real_track_env  = unwrap_env(self.track_env)
 
         # sync both with current world
-        _sync_envs(self.base_env, real_search_env)
-        _sync_envs(self.base_env, real_track_env)
+        _sync_envs(self, real_search_env)
+        _sync_envs(self, real_track_env)
 
         # choose agent
         if macro_action == 0:
             obs = real_search_env.obs
             micro_action, _ = self.search_agent.predict(obs, deterministic=False)
-            next_obs, _, done, truncated, info = real_search_env.step(micro_action)
-            trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self.base_env)
+            next_obs, micro_reward, done, truncated, info = real_search_env.step(micro_action)
+            """ trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self.base_env)
             if (sum(trackingNeeded) + sum(trackingReallyNeeded))>=1:
                 # tracking nedded instead of 
                 macro_reward = -0.5 * (sum(trackingNeeded) + sum(trackingReallyNeeded))
             else:
-                macro_reward = 1
+                macro_reward = 1 """
 
-            """ if len(info["lost_targets"]) == 0:
-                macro_reward = self._compute_search_reward(real_search_env)
+            if len(info["lost_targets"]) == 0:
+                #macro_reward = self._compute_search_reward(real_search_env)
+                trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
+                if any(trackingNeeded):
+                    macro_reward = -2.0
+                    if any(trackingReallyNeeded):
+                        macro_reward = macro_reward - 3.0
+                else:
+                    macro_reward = +5.0
             else:
                 # target got lost
-                macro_reward = -1 * len(info["lost_targets"]) """
+                macro_reward = -10 * len(info["lost_targets"])
+                """ _sync_envs(real_search_env, self)
+                obs = self._get_obs()
+                self.step_count += 1
+
+                reward = -100.0   
+                done = True
+                truncated = False
+
+                info = {
+                    "catastrophic_loss": True,
+                    "remaining_targets": self.n_targets,
+                    "action_mask": self.get_action_mask()
+                }
+
+                self.obs = obs
+                return obs, reward, done, truncated, info """
 
             # sync back into base env
-            _sync_envs(real_search_env, self.base_env)
+            _sync_envs(real_search_env, self)
 
         else:
             obs = real_track_env.obs
             #micro_action, _ = self.track_agent.predict(obs, deterministic=False)
             micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
             next_obs, _, done, truncated, info = real_track_env.step(micro_action)
-            trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self.base_env)
+            trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
             if any(trackingNeeded):
                 macro_reward = 2.0
-            elif any(trackingReallyNeeded):
-                macro_reward = 3.0
+                if any(trackingReallyNeeded):
+                    macro_reward = macro_reward + 3.0
             else:
-                macro_reward = -1.0
+                macro_reward = -5.0
 
             # sync back into base env
-            _sync_envs(real_track_env, self.base_env)
-
+            _sync_envs(real_track_env, self)
+        
+        next_obs = self._get_obs()
+        self.obs = next_obs
+        done = self.step_count >= self.max_steps
+        #print(macro_reward)
         return next_obs, macro_reward, done, truncated, info
 
     # ---------------------------------------------------------------------
-    def _build_macro_obs(self, obs):
-        """Extracts target state + covariance + mask into flattened vector."""
-        target_states = self.base_env.get_target_states()      # shape [n_targets, 4]
-        target_covs = self.base_env.get_target_covariances()   # shape [n_targets, 2x2 or diag]
+    def _get_obs(self, target_id=None):
+        """Extracts target covariance trace."""
+
+        known_by_id = {t["id"]: t for t in self.targets}
+
         obs_list = []
-        for i in range(self.max_targets):
-            if i < self.n_targets:
-                s = target_states[i]
-                c = np.diag(target_covs[i]) if target_covs[i].ndim == 2 else target_covs[i]
-                obs_list.append(np.concatenate([s, c]))
+
+        for i in range(self.init_n_targets + self.init_n_unknown_targets):
+            if i in known_by_id:
+                tgt = known_by_id[i]
+                p_fov = compute_fov_prob_single(
+                    self.fov_size, tgt["x"], tgt["P"]
+                )
             else:
-                obs_list.append(np.zeros(self.obs_dim_per_target))
-        obs_flat = np.concatenate(obs_list + [self.known_mask.astype(np.float32)])
-        return obs_flat.astype(np.float32)
+                p_fov = 0.0
+
+            obs_list.append(p_fov)
+
+        return np.array(obs_list, dtype=np.float32)
+
+        """ all_targets = [] 
+        for i in range(self.init_n_targets + self.init_n_unknown_targets):
+            for tgt_known in self.base_env.targets:
+                if tgt_known["id"] == i:
+                    all_targets.append(tgt_known)
+                    break
+            for tgt_unknown in self.base_env.unknown_targets:
+                if tgt_unknown["id"] == i:
+                    all_targets.append(tgt_unknown)
+                    break
+
+            
+        obs_list = []
+
+        for i, tgt in enumerate(all_targets):
+            x, y, vx, vy = tgt["x"]
+            trace = np.trace(tgt["P"])
+
+            p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
+
+            #known = 1.0 if self.known_mask[tgt["id"]] else 0.0
+
+            obs_list.extend([p_fov])
+
+        return np.array(obs_list, dtype=np.float32) """
 
     # ---------------------------------------------------------------------
     def _compute_search_reward(self, env):
@@ -156,6 +317,7 @@ class MacroEnv(gym.Env):
         """
         post_in_fov_unc = []
         post_track_required = []
+        target_lost = []
         #post_in_fov = self._uncertainty_within_fov(env, margin=1.0)
         for obj in env.targets:
             x = obj['x']
@@ -165,7 +327,12 @@ class MacroEnv(gym.Env):
             # check if probability of being in FOV is larger than threshold
             post_in_fov_unc.append(prob>self.tracking_requested)
             post_track_required.append(prob<self.tracking_requested and prob > self.threshold_fov)
-        return 2.0 if all(post_in_fov_unc) else 1 if any(post_track_required) else 0
+            target_lost.append(prob<self.threshold_fov)
+        
+        if any(target_lost):
+            return -1*sum(target_lost)
+
+        return 2.0 if all(post_in_fov_unc) else 0 #if any(post_track_required)
 
     def _compute_track_reward(self, env):
         """
@@ -225,7 +392,7 @@ def _sync_envs(source_env, dest_env):
 
     # --- Tracking-related state ---
     dest_env.known_mask = np.copy(source_env.known_mask)
-    dest_env.obs = np.copy(source_env.obs)
+    #dest_env.obs = np.copy(source_env.obs)
     dest_env.motion_model = np.copy(source_env.motion_model)
     dest_env.motion_params = np.copy(source_env.motion_params)
     dest_env.lost_counter = source_env.lost_counter
