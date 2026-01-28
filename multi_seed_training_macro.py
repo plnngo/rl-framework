@@ -18,7 +18,7 @@ from train_agent import SharedLivePlot, LivePlotCallback
 
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 15_000
+total_timesteps = 60_000
 save_dir = "macro_results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -46,7 +46,7 @@ class MacroRandomSeedEnv(gym.Env):
         self.init_n_unknown_target = n_unknown_targets
 
         # Build initial env to expose observation and action space
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, np.random.choice(seed_list))
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)))
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
 
@@ -60,8 +60,8 @@ class MacroRandomSeedEnv(gym.Env):
             n_targets=n_targets, n_unknown_targets=n_unknown_targets,
             seed=seed, mode="track"
         )
-        search_agent = PPO.load("agents/ppo_search_trained", env=env_search)
-        track_agent = PPO.load("agents/ppo_track_trained", env=env_track)
+        search_agent = PPO.load("agents/ppo_search_trained_IEEE", env=env_search)
+        track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
 
         return MacroEnv(
             n_targets=n_targets,
@@ -72,9 +72,9 @@ class MacroRandomSeedEnv(gym.Env):
         )
 
     def reset(self, **kwargs):
-        seed = np.random.choice(self.seed_list)
+        seed = int(np.random.choice(self.seed_list))
         self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed)
-        return self.env.reset(**kwargs)
+        return self.env.reset(seed=seed)
 
     def step(self, action):
         return self.env.step(action)
@@ -220,11 +220,11 @@ def main():
     # --- DQN ---
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)
-    run_random_policy(shared_plotter, color_random, total_timesteps, save_dir)
+    #run_random_policy(shared_plotter, color_random, total_timesteps, save_dir)
 
     shared_plotter.finalize()
 

@@ -7,7 +7,7 @@ from train_agent import LivePlotCallback, SharedLivePlot
 from multi_target_env import MultiTargetEnv
 
 
-def make_env(mode="track", n_targets=5, n_unknown_targets=100, seed=None):
+def make_env(mode="search", n_targets=5, n_unknown_targets=100, seed=None):
     """Utility function to create and return the environment."""
     return MultiTargetEnv(n_targets=n_targets, n_unknown_targets=n_unknown_targets, mode=mode)
 
@@ -46,7 +46,26 @@ def train_ppo(params, trial_name, total_timesteps=50_000, plotter=None, color=No
 
 def objective(trial, shared_plotter=None):
     """Optuna objective function for tuning PPO hyperparameters."""
+
+    n_steps = trial.suggest_categorical("n_steps", [128, 256])
+    batch_size = trial.suggest_categorical("batch_size", [32, 64, 128, 256])
+
+    # Enforce PPO constraint
+    if batch_size > n_steps:
+        return -1e9   # or float("-inf")
+
     params = {
+        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 5e-4, log=True),
+        "n_steps": n_steps,
+        "batch_size": batch_size,
+        "gamma": trial.suggest_float("gamma", 0.88, 0.95),
+        "gae_lambda": trial.suggest_float("gae_lambda", 0.75, 0.9),
+        "clip_range": trial.suggest_float("clip_range", 0.3, 0.6),
+        "ent_coef": trial.suggest_float("ent_coef", 1e-4, 1e-2, log=True),
+        "vf_coef": trial.suggest_float("vf_coef", 0.4, 0.8),
+        "max_grad_norm": trial.suggest_float("max_grad_norm", 0.5, 1.0),
+    }
+    """ params = {
         "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True),
         "n_steps": trial.suggest_categorical("n_steps", [128, 256, 512, 1024]),
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256]),
@@ -56,7 +75,7 @@ def objective(trial, shared_plotter=None):
         "ent_coef": trial.suggest_float("ent_coef", 0.0, 0.05),
         "vf_coef": trial.suggest_float("vf_coef", 0.1, 1.0),
         "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0),
-    }
+    } """
 
     trial_name = f"trial_{trial.number}"
     color = cm.get_cmap("tab20")(trial.number % 20) if shared_plotter else None
@@ -93,7 +112,7 @@ def main():
         pruner=optuna.pruners.MedianPruner(),
     )
 
-    study.optimize(lambda trial: objective(trial, shared_plotter), n_trials=10)
+    study.optimize(lambda trial: objective(trial, shared_plotter), n_trials=7)
 
     print("Best trial:")
     print(study.best_trial.params)

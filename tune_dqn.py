@@ -10,7 +10,7 @@ from multi_target_env import MultiTargetEnv
 
 # --- ENV CREATION ------------------------------------------------------------
 
-def make_env(mode="track", n_targets=5, n_unknown_targets=100, seed=None):
+def make_env(mode="search", n_targets=5, n_unknown_targets=100, seed=None):
     """Utility function to create and return the environment."""
     # Always return the same setup for training and evaluation
     def _init():
@@ -74,7 +74,7 @@ def objective(trial, shared_plotter=None):
             "learning_rate", 5e-5, 4e-4, log=True
         ),
         "gamma": trial.suggest_float(
-            "gamma", 0.9, 0.95
+            "gamma", 0.9, 0.99
         ),
 
         # --- Replay buffer ---
@@ -101,7 +101,7 @@ def objective(trial, shared_plotter=None):
             "gradient_steps", [4, 8]
         ),
         "learning_starts": trial.suggest_categorical(
-            "learning_starts", [5000, 10000]
+            "learning_starts", [1000, 10000]
         ),
 
         # --- Target network update ---
@@ -131,7 +131,7 @@ def objective(trial, shared_plotter=None):
         model = train_dqn(
             params,
             trial_name=f"{trial_name}_seed{seed}",
-            total_timesteps=20_000,
+            total_timesteps=40_000,
             plotter=shared_plotter,
             color=color,
             seed=seed,

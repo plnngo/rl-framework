@@ -2,7 +2,7 @@ import numpy as np
 import optuna
 import matplotlib.cm as cm
 
-from stable_baselines3 import PPO
+from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.evaluation import evaluate_policy
 from stable_baselines3.common.vec_env import DummyVecEnv
 
@@ -15,7 +15,7 @@ from train_agent import LivePlotCallback, SharedLivePlot
 # ENV CREATION
 # ============================================================================
 
-def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=2.0, seed=None):
+def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=4.0, seed=None):
     """
     Create the MacroEnv, wrapped in DummyVecEnv for PPO compatibility.
     PPO can also work without VecEnv, but this ensures consistency.
@@ -33,8 +33,8 @@ def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=2.0, seed=None):
         )
 
         # Pretrained PPO micro agents
-        search_agent = PPO.load("agents/ppo_search_trained", env=env_search)
-        track_agent = PPO.load("agents/ppo_track_trained", env=env_track)
+        search_agent = PPO.load("agents/ppo_search_trained_IEEE", env=env_search)
+        track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
 
         env = MacroEnv(
             n_targets=n_targets,
@@ -52,7 +52,7 @@ def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=2.0, seed=None):
 # TRAINING LOOP
 # ============================================================================
 
-def train_macro_ppo(params, trial_name, total_timesteps=80_000, plotter=None, color=None, seed=None):
+def train_macro_ppo(params, trial_name, total_timesteps=20_000, plotter=None, color=None, seed=None):
     """
     Train PPO on the MacroEnv using provided hyperparameters.
     """
@@ -100,20 +100,24 @@ def objective_macro_ppo(trial, shared_plotter=None):
 
     # Hyperparameter search space
     params = {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
-        "n_steps": trial.suggest_categorical("n_steps", [128, 256, 512, 1024]),
-        "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128, 256]),
-        "gamma": trial.suggest_float("gamma", 0.92, 0.9999),
-        "gae_lambda": trial.suggest_float("gae_lambda", 0.8, 1.0),
-        "clip_range": trial.suggest_float("clip_range", 0.1, 0.4),
-        "ent_coef": trial.suggest_float("ent_coef", 0.0, 0.05),
-        "vf_coef": trial.suggest_float("vf_coef", 0.1, 1.0),
-        "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0),
+        "learning_rate": trial.suggest_float("learning_rate", 1.5e-4, 6e-4, log=True),
+
+        "n_steps": trial.suggest_categorical("n_steps", [384, 512, 768]),
+        "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
+
+        "gamma": trial.suggest_float("gamma", 0.90, 0.96),
+        "gae_lambda": trial.suggest_float("gae_lambda", 0.90, 0.97),
+
+        "clip_range": trial.suggest_float("clip_range", 0.12, 0.22),
+        "ent_coef": trial.suggest_float("ent_coef", 0.02, 0.05),
+
+        "vf_coef": trial.suggest_float("vf_coef", 0.5, 0.9),
+        "max_grad_norm": trial.suggest_float("max_grad_norm", 0.8, 1.2),
 
         "policy_kwargs": dict(
             net_arch=trial.suggest_categorical(
-                "net_arch", [(64, 64), (128, 128), (256, 256)]
-            ),
+                "net_arch", [(64, 64), (128, 64)]
+            )
         ),
     }
 
@@ -127,7 +131,7 @@ def objective_macro_ppo(trial, shared_plotter=None):
         model = train_macro_ppo(
             params,
             trial_name=f"{trial_name}_seed{seed}",
-            total_timesteps=60_000,
+            total_timesteps=20_000,
             plotter=shared_plotter,
             color=color,
             seed=seed,

@@ -17,7 +17,7 @@ from train_agent import LivePlotCallback, SharedLivePlot
 # ENV CREATION
 # ============================================================================
 
-def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=2.0, seed=None):
+def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=4.0, seed=None):
     """
     Create a MacroEnv wrapped in DummyVecEnv for DQN.
     """
@@ -30,8 +30,8 @@ def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=2.0, seed=None):
                                    seed=seed, mode="track")
 
         # Load pretrained micro-agents
-        search_agent = PPO.load("agents/ppo_search_trained", env=env_search)
-        track_agent = PPO.load("agents/ppo_track_trained", env=env_track)
+        search_agent = PPO.load("agents/ppo_search_trained_IEEE", env=env_search)
+        track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
 
         env = MacroEnv(
             n_targets=n_targets,
@@ -40,6 +40,8 @@ def make_macro_env(n_targets=5, n_unknown_targets=100, fov_size=2.0, seed=None):
             search_agent=search_agent,
             track_agent=track_agent
         )
+        env.reset(seed=seed)
+
         return env
 
     return DummyVecEnv([_init])
@@ -132,14 +134,14 @@ def objective_macro_dqn(trial, shared_plotter=None):
     trial_name = f"trial_{trial.number}"
     color = cm.get_cmap("tab20")(trial.number % 20) if shared_plotter else None
 
-    seeds = [42, 123, 321]
+    seeds = [42]      #seeds = [42, 123, 321]
     rewards = []
 
     for seed in seeds:
         model = train_dqn_macro(
             params,
             trial_name=f"{trial_name}_seed{seed}",
-            total_timesteps=30_000,
+            total_timesteps=20_000,
             plotter=shared_plotter,
             color=color,
             seed=seed,

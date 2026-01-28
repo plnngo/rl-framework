@@ -40,7 +40,7 @@ def train_dqn_macro(
     params,
     trial_name,
     seed_list,
-    total_timesteps=15_000,
+    total_timesteps=20_000,
     plotter=None,
     color=None,
 ):
@@ -136,7 +136,7 @@ def objective_macro(trial, seed_list, shared_plotter=None):
             params,
             trial_name=f"{trial_name}_run{eval_run}",
             seed_list=seed_list,
-            total_timesteps=40_000,
+            total_timesteps=20_000,
             plotter=shared_plotter,
             color=color,
         )
