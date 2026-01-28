@@ -462,9 +462,12 @@ def generate_truth_states(t_vec, tgt_id, env):
 
     # Allocate output
     truth_states = np.zeros((len(t_vec), n))
+    measurements = np.zeros((len(t_vec), 2))        # 2 <- theta and r
+    H_mod = []
 
     # Initial state at t=0
     x0 = env.targets[tgt_id]["x"].copy()
+
     if env.motion_model[tgt_id] == "T":     # CT model has ω (turn rate)
         x0 = np.append(x0, env.motion_params[tgt_id])
 
@@ -486,6 +489,9 @@ def generate_truth_states(t_vec, tgt_id, env):
 
     # Store initial propagated truth
     truth_states[0] = x0
+    theta, r, H = MultiTargetEnv.extract_measurement(x0[:4])
+    measurements[0,:] = np.array([theta, r])
+    H_mod.append(H)
 
     # --- Propagate through all times ---
     for k in range(len(t_vec)-1):
@@ -504,9 +510,14 @@ def generate_truth_states(t_vec, tgt_id, env):
             )
 
         truth_states[k+1] = x_next
+        theta, r, H = MultiTargetEnv.extract_measurement(x_next[:4])
+        measurements[k+1,:] = [theta, r]
+        H_mod.append(H)
+
+
         x0 = x_next
 
-    return truth_states
+    return truth_states, measurements, H_mod
 
 # -------------------------------------------------------------------------
 # 1. Extract states, covariances, and compute errors + sigma bounds
