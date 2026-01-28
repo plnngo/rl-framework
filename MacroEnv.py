@@ -209,7 +209,7 @@ class MacroEnv(gym.Env):
             else:
                 macro_reward = 1 """
 
-            if len(info["lost_targets"]) == 0:
+            """ if len(info["lost_target"]) == 0:
                 #macro_reward = self._compute_search_reward(real_search_env)
                 trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
                 if any(trackingNeeded):
@@ -220,8 +220,8 @@ class MacroEnv(gym.Env):
                     macro_reward = +5.0
             else:
                 # target got lost
-                macro_reward = -10 * len(info["lost_targets"])
-                """ _sync_envs(real_search_env, self)
+                macro_reward = -10 * len(info["lost_target"]) """
+            """ _sync_envs(real_search_env, self)
                 obs = self._get_obs()
                 self.step_count += 1
 
@@ -245,8 +245,8 @@ class MacroEnv(gym.Env):
             obs = real_track_env.obs
             #micro_action, _ = self.track_agent.predict(obs, deterministic=False)
             micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
-            next_obs, _, done, truncated, info = real_track_env.step(micro_action)
-            trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
+            next_obs, micro_reward, done, truncated, info = real_track_env.step(micro_action)
+            """ trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
             if any(trackingNeeded):
                 macro_reward = 2.0
                 if any(trackingReallyNeeded):
@@ -254,13 +254,27 @@ class MacroEnv(gym.Env):
             else:
                 macro_reward = -5.0
 
-            # sync back into base env
+            # sync back into base env """
             _sync_envs(real_track_env, self)
         
         next_obs = self._get_obs()
         self.obs = next_obs
+        macro_reward = sum(next_obs)
+        """ if info["lost_target"]:
+            self.step_count += 1
+
+            reward = -100.0   
+            done = True
+            truncated = False
+
+            info = {
+                "catastrophic_loss": True,
+                "remaining_targets": self.n_targets,
+                "action_mask": self.get_action_mask()
+            }
+
+            return next_obs, reward, done, truncated, info """
         done = self.step_count >= self.max_steps
-        #print(macro_reward)
         return next_obs, macro_reward, done, truncated, info
 
     # ---------------------------------------------------------------------

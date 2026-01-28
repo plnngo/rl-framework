@@ -118,7 +118,7 @@ class MCTS:
             obs = env.search_env.env.obs
             micro_action, _ = env.search_agent.predict(obs, deterministic=False)
             next_obs, rewards, done, truncated, info = env.search_env.env.step(micro_action) 
-            _sync_envs(env.search_env.env, env.base_env)
+            _sync_envs(env.search_env.env, env)
             _sync_envs(env.search_env.env, env.track_env.env)
         else:  # TRACK
             known_targets = np.where(env.track_env.env.known_mask)[0]
@@ -128,7 +128,7 @@ class MCTS:
                 obs = env.search_env.env.obs
                 micro_action, _ = env.search_agent.predict(obs, deterministic=False)
                 next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
-                _sync_envs(env.search_env.env, env.base_env)
+                _sync_envs(env.search_env.env, env)
                 _sync_envs(env.search_env.env, env.track_env.env)
                 micro_track = None
             else:
@@ -137,7 +137,7 @@ class MCTS:
                 micro_search = None
                 action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
                 next_obs, rewards, done, truncated, info = env.track_env.env.step(action) 
-                _sync_envs(env.track_env.env, env.base_env)
+                _sync_envs(env.track_env.env, env)
                 _sync_envs(env.track_env.env, env.search_env.env)
 
         # 3. Encode and step action
@@ -173,7 +173,7 @@ class MCTS:
                 obs = env.search_env.env.obs
                 micro_action, _ = env.search_agent.predict(obs, deterministic=False)
                 next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
-                _sync_envs(env.search_env.env, env.base_env)
+                _sync_envs(env.search_env.env, env)
                 _sync_envs(env.search_env.env, env.track_env.env)
                 micro_track = None
             else:  # TRACK
@@ -183,7 +183,7 @@ class MCTS:
                     obs = env.search_env.env.obs
                     micro_action, _ = env.search_agent.predict(obs, deterministic=False)
                     next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
-                    _sync_envs(env.search_env.env, env.base_env)
+                    _sync_envs(env.search_env.env, env)
                     _sync_envs(env.search_env.env, env.track_env.env)
                     micro_track = None
                 else:
@@ -191,7 +191,7 @@ class MCTS:
                     micro_search = None
                     action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
                     next_obs, reward, done, truncated, info = env.track_env.env.step(action) 
-                    _sync_envs(env.track_env.env, env.base_env)
+                    _sync_envs(env.track_env.env, env)
                     _sync_envs(env.track_env.env, env.search_env.env)
             
            
@@ -262,11 +262,11 @@ class MCTS:
                 # Step environment
                 if node.macro_action == 0:
                     next_obs, rewards, done, truncated, info = env_copy.search_env.env.step(node.micro_action) 
-                    _sync_envs(env_copy.search_env.env, env_copy.base_env)
+                    _sync_envs(env_copy.search_env.env, env_copy)
                     _sync_envs(env_copy.search_env.env, env_copy.track_env.env)
                 else:
                     next_obs, rewards, done, truncated, info = env_copy.track_env.env.step(node.micro_action) 
-                    _sync_envs(env_copy.track_env.env, env_copy.base_env)
+                    _sync_envs(env_copy.track_env.env, env_copy)
                     _sync_envs(env_copy.track_env.env, env_copy.search_env.env)
                 
                 path.append(node)
