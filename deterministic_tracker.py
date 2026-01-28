@@ -1,3 +1,4 @@
+import numpy as np
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single, compute_kl_divergence
 
 
@@ -65,3 +66,8 @@ def select_best_action(env, dt=None):
             best_update = {"x": x_upd, "P": P_upd}
 
     return best_target_id, best_ig, best_update
+
+def select_best_macro_action(env):
+    obs = env._get_obs()
+    known_obs = obs[env.known_mask]
+    return 1 if np.any(known_obs <= env.threshold_fov) else 0
