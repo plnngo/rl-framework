@@ -345,7 +345,6 @@ class MultiTargetEnv(gym.Env):
 
                 return obs, reward, terminated, truncated, info
 
-
         # Compute reward
         if len(detections) > 0:
             threshold = 3.0  # example Mahalanobis threshold
@@ -363,15 +362,16 @@ class MultiTargetEnv(gym.Env):
         # --- SEARCH macro: update visit counts and compute reward ---
         self.visit_counts[grid_idx] += 1
         reward = total_iG
-        exploration_bonus = 1.0 / np.log(self.visit_counts[grid_idx] + 2)
+        """ exploration_bonus = 1.0 / np.log(self.visit_counts[grid_idx] + 2)
 
         # Penalize staying still
         if hasattr(self, "last_search_idx") and self.last_search_idx == grid_idx:
-            exploration_bonus -= 0.5
+            exploration_bonus -= 0.5 """
         self.last_search_idx = grid_idx
         self.prev_search_pos = search_pos
 
         # --- Upper-half bonus ---
+        exploration_bonus = 0
         if search_pos[1] > 0:  # cell in upper half
             exploration_bonus += 1.0   
 
@@ -386,7 +386,7 @@ class MultiTargetEnv(gym.Env):
         truncated = False
 
         # Info dict can include diagnostics
-        info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask(), "lost_targets": lost_targets}
+        info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
         self.obs = obs
 
         return obs, reward, done, truncated, info
@@ -729,7 +729,9 @@ def compute_fov_prob_single(fov, x, P):
     Compute FOV-retention probability reward for neglected targets.
     """
 
-    half_fov = fov*0.75 / 2.0   # radians or degrees, consistent with measurement model
+    #half_fov = fov*0.75 / 2.0   # radians or degrees, consistent with measurement model
+    half_fov = fov / 2.0   # radians or degrees, consistent with measurement model
+
     prob = 1.0
     for i in range(2):
         pos_var = P[i, i]
@@ -739,7 +741,7 @@ def compute_fov_prob_single(fov, x, P):
         if pos_std < 1e-8:
             pos_std = 1e-8
 
-        # --- 4. Probability that target's x-pos ∈ [-half_fov, +half_fov] ---
+        # Probability that target's x-pos ∈ [-half_fov, +half_fov] ---
         # Gaussian N(0, σ)
         dist = norm(loc=0.0, scale=pos_std)
         prob *= dist.cdf(half_fov) - dist.cdf(-half_fov)
