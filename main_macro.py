@@ -3,18 +3,205 @@ from matplotlib import pyplot as plt
 import numpy as np
 from stable_baselines3 import DQN, PPO
 from tqdm import trange
+from LSBatchFilter import generate_truth_states
 import MCTSenv
 from MacroEnv import MacroEnv, _sync_envs
 from deterministic_tracker import select_best_macro_action
-from main import analyse_tracking_task, plot_detection_bar_chart, plot_means_lost_targets, plot_violin
+from main import analyse_tracking_task, estimateAndPlot, extract_tracks_from_log, plot_detection_bar_chart, plot_means_lost_targets, plot_violin
 from multi_seed_training_macro import MacroRandomSeedEnv
 from multi_target_env import MultiTargetEnv
 
-def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, random_policy=False, deterministic_policy=False,):
+def computeRMSEalgo(seeds=None, heuristic=False, random=False, model=None, trackModel=None, env=None, n_episodes=100, sigma_theta=0, sigma_r=0, R=None, Q=None):
+    error_episodes = []
+    total_traceCov_episodes = []
+    for i in range(n_episodes):
+        if heuristic or random:
+            det_rewards, detection_count, exceedFOV_det, last_env, last_episode_log, known, last_tasks_log, det_illegal = evaluate_agent_macro(seeds=seeds, env=env, model=None, n_episodes=1, random_policy=random, deterministic_policy=heuristic)
+        elif model=="ppo":
+            if trackModel == "dqn":
+                ppo_model = PPO.load("agents/ppo_macro_trained_dqn_track", env=env)
+            else:
+                ppo_model = PPO.load("agents/ppo_macro_trained", env=env)
+
+            ppo_rewards, detection_count, exceedFOV_ppo, last_env, last_episode_log, known, last_tasks_log, ppo_illegal = evaluate_agent_macro(seeds=seeds, env=env, model=ppo_model, n_episodes=1)
+
+        else:
+            if trackModel == "dqn":
+               dqn_model = DQN.load("agents/dqn_macro_trained_dqn_track", env=env)
+            else:
+               dqn_model = DQN.load("agents/dqn_macro_trained", env=env)
+
+            dqn_rewards, detection_count, exceedFOV_dqn, last_env, last_episode_log, known, last_tasks_log, dqn_illegal = evaluate_agent_macro(seeds=seeds, env=env, model=dqn_model, n_episodes=1)
+        #max_id = max((t["id"] for t in env.targets), default=None)
+        tracks = extract_tracks_from_log(last_episode_log, env.max_targets)
+        # Generate truth data
+        timesteps = np.arange(last_env.max_steps)
+        all_target_states = {}
+        all_meas = {}
+        for tgt_id in last_env.targets:
+            tid = tgt_id["id"]
+            truth_states, measurements, _ = generate_truth_states(timesteps, tid, last_env)
+            all_target_states[tid] = truth_states
+            measurements[:, 0] += np.random.normal(0, sigma_theta, size=len(measurements))
+            measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
+            all_meas[tid] = measurements
+        for tgt_id in last_env.unknown_targets:
+            tid = tgt_id["id"]
+            truth_states, measurements, _ = generate_truth_states(timesteps, tid, last_env)
+            all_target_states[tid] = truth_states
+            measurements[:, 0] += np.random.normal(0, sigma_theta, size=len(measurements))
+            measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
+            all_meas[tid] = measurements
+
+        errors_all_targets, total_trace_cov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q)
+
+        episode_error = 0.0
+
+        for tgt_error in errors_all_targets:
+            # Skip empty target errors
+            if tgt_error.size == 0:
+                continue
+
+            # tgt_error shape: (state_dim, T_i)
+            pos_error = tgt_error[:2, :]            # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)   # (T_i,)
+            rmse_target = np.sqrt(np.mean(sq_err))
+
+            episode_error += rmse_target
+
+        if len(errors_all_targets)>0:
+            rmse_all_target = episode_error/len(errors_all_targets)
+            error_episodes.append(rmse_all_target)
+
+        total_episode_trace_cov = sum(np.sum(arr) for arr in total_trace_cov)
+        """ total_episode_error = 0
+        for tgt_error in total_error_all_targets:
+            pos_error = tgt_error[:2, :]                  # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            total_rmse_target = np.sqrt(np.mean(sq_err))
+            total_episode_error = total_episode_error + total_rmse_target """
+        if len(total_trace_cov)>0:
+            total_trace_all_target = total_episode_trace_cov/len(total_trace_cov)
+            total_traceCov_episodes.append(total_trace_all_target)
+        env.reset()
+
+    error_episodes = np.array(error_episodes)
+    total_traceCov_episodes = np.array(total_traceCov_episodes)
+
+    if len(error_episodes)>0:
+        mean_pos_error_all_episodes = sum(error_episodes)/len(error_episodes)
+        print("Mean of positional errors over all episodes " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodes], ddof=1))
+    if len(total_traceCov_episodes)>0:
+        mean_pos_total_error_all_episodes = sum(total_traceCov_episodes)/len(total_traceCov_episodes)
+        print("Mean of covariance trace over all episodes " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in total_traceCov_episodes], ddof=1))
+    return error_episodes, total_traceCov_episodes
+
+def rmsePlot():
+
+    seeds = [42, 123, 321]
+    n_episodes = 100
+    n_targets = 5
+    n_unknown_targets =100
+
+    #DQN tracker
+    trackModel="dqn"
+    env = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False)
+    obs = env.reset()
+
+    sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
+    sigma_r = 0.1        # 10 cm range noise
+
+    R = np.diag([sigma_theta**2, sigma_r**2])
+    Q = np.eye(2) * 1e-17
+
+    heuristic = True
+    random = False
+    model = None
+    print("Heuristic starts")
+    errors_heuristic, total_errors_heuristic = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = False
+    model = "dqn"
+    print("DQN starts")
+    errors_dqn, total_errors_dqn = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = False
+    model = "ppo"
+    print("PPO starts")
+    errors_ppo, total_errors_ppo = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = True
+    model = None
+    print("Random starts")
+    errors_random, total_errors_random = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+
+    #Heuristic tracker
+    trackModel = None
+    env = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True)
+    obs = env.reset()
+
+    heuristic = True
+    random = False
+    model = None
+    print("Heuristic starts")
+    errors_heuristic_heuristicTrack, total_errors_heuristic_heuristicTrack = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = False
+    model = "dqn"
+    print("DQN starts")
+    errors_dqn_heuristicTrack, total_errors_dqn_heuristicTrack = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = False
+    model = "ppo"
+    print("PPO starts")
+    errors_ppo_heuristicTrack, total_errors_ppo_heuristicTrack = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = True
+    model = None
+    print("Random starts")
+    errors_random_heuristicTrack, total_errors_random_heuristicTrack = computeRMSEalgo(seeds, heuristic, random, model, trackModel, env, n_episodes, sigma_theta, sigma_r, R, Q)
+
+
+    results = {
+        "Random": errors_random,
+        "PPO": errors_ppo,
+        "Heuristic": errors_heuristic,
+        "DQN" : errors_dqn
+    }
+    plot_violin(results, ylabel="Positional Error")
+
+    results = {
+        "Random": total_errors_random,
+        "PPO": total_errors_ppo,
+        "Heuristic": total_errors_heuristic,
+        "DQN" : total_errors_dqn
+    }
+    plot_violin(results, ylabel="Total Covariance Trace")
+
+    results = {
+        "Random": errors_random_heuristicTrack,
+        "PPO": errors_ppo_heuristicTrack,
+        "Heuristic": errors_heuristic_heuristicTrack,
+        "DQN" : errors_dqn_heuristicTrack
+    }
+    plot_violin(results, ylabel="Positional Error")
+
+    results = {
+        "Random": total_errors_random_heuristicTrack,
+        "PPO": total_errors_ppo_heuristicTrack,
+        "Heuristic": total_errors_heuristic_heuristicTrack,
+        "DQN" : total_errors_dqn_heuristicTrack
+    }
+    plot_violin(results, ylabel="Total Covariance Trace")
+
+def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, random_policy=False, deterministic_policy=False):
     rewards = []
     detect_count3 = 0
     detection_count = []
     exceedFOV = []
+    illegal = []
 
     # for logging the final episode
     last_episode_log = {}
@@ -27,7 +214,6 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
     for ep in trange(n_episodes, desc="Evaluating",  leave=False):
         seed = int(np.random.choice(seeds))
         obs, _ = env.reset(seed=seed)
-        exceed_target = []
         if ep == n_episodes - 1:
             last_env = copy.deepcopy(env)
             episode_log = {}        # create a temporary log if this is the last episode
@@ -36,6 +222,7 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
         total_reward = 0.0
         detections = env.init_n_targets
         t = 0  # timestep counter
+        illegalActs = 0;
 
         while not done:
 
@@ -65,30 +252,33 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
                 episode_log[t] = {}
                 episode_task_log[t] = {"timestamp": t, "action": int(action)}
             if ep == n_episodes - 1:
-                """ for tgt in range(env.base_env.n_targets):
+                for tgt in env.targets:
                     #print(env.base_env.targets[tgt]["id"])
-                    exceed, x, P = analyse_tracking_task(next_obs, env.base_env.targets[tgt]["id"], env.base_env, confidence=0.95)
-                    if exceed and tgt not in exceed_target:
-                        exceed_target.append(tgt)
+                    if info.get("invalid_action") or info.get("catastrophic_loss") or not info["target_id"]:
+                        if info.get("invalid_action"):
+                            illegalActs += 1
+                        break
+                    exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
    
                     # if this is the last episode, store everything
-                    if tgt == info["target_id"]:
-                        episode_log[t][tgt] = {
-                            "id": tgt,
+                    if tgt["id"] in info["target_id"]:
+                        episode_log[t][tgt["id"]] = {
+                            "id": tgt["id"],
                             "state": x.copy(),
                             "cov": P.copy()
-                        } """
+                        }
 
             t += 1  # increment timestep
         rewards.append(total_reward)
         detection_count.append(env.detect_counter)
         exceedFOV.append(env.lost_counter)
         known.append(env.n_targets)
+        illegal.append(illegalActs)
         # --- For last episode, store deep copy of env ---
         if ep == n_episodes - 1:
             last_episode_log = episode_log
             last_tasks_log = episode_task_log
-    return rewards, detection_count, exceedFOV, last_env, last_episode_log, known, last_tasks_log
+    return rewards, detection_count, exceedFOV, last_env, last_episode_log, known, last_tasks_log, illegal
 
 
 
@@ -282,29 +472,91 @@ def plot_task_log(task_log, title="Action Timeline"):
     plt.grid(True)
     plt.show()
 
-if __name__ == "__main__":
+
+def main():
     seeds = [42, 123, 321]
-    n_episodes = 10
+    n_episodes = 100
     n_targets = 5
     n_unknown_targets =100
 
     """ envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
     mcts = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.95)
-    rewardsMcts, detection_countMcts, exceedFOVMcts, last_envMcts, last_episode_logMcts, knownMcts, last_tasks_logMcts = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts, n_episodes=n_episodes, random_policy=True, deterministic_policy=False) """
+    rewardsMcts, detection_countMcts, exceedFOVMcts, last_envMcts, last_episode_logMcts, knownMcts, last_tasks_logMcts = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)  """
 
-    envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
-    rewardsHeuristic, detection_countHeuristic, exceedFOVHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristic, last_tasks_logHeuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    # DQN tracker
+    envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False)
+    rewardsHeuristic, detection_countHeuristic, exceedFOVHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristic, last_tasks_logHeuristic, illegal_heuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    print("Reward - Heuristic macro - DQN tracker")
+    print(sum(rewardsHeuristic)/len(rewardsHeuristic))
+    print(np.std([np.mean(arr) for arr in rewardsHeuristic], ddof=1))
+    print("Detections")
+    print(sum(detection_countHeuristic)/len(detection_countHeuristic))
+    print(np.std([np.mean(arr) for arr in detection_countHeuristic], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVHeuristic)/len(exceedFOVHeuristic))
+    print(np.std([np.mean(arr) for arr in exceedFOVHeuristic], ddof=1))
+    print("Known")
+    print(sum(knownHeuristic)/len(knownHeuristic))
+    print(np.std([np.mean(arr) for arr in knownHeuristic], ddof=1))
+    print("Illegal")
+    print(sum(illegal_heuristic)/len(illegal_heuristic))
+    print(np.std([np.mean(arr) for arr in illegal_heuristic], ddof=1))
 
-    envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
-    rewardsRandom, detection_countRandom, exceedFOVRandom, last_envRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom = evaluate_agent_macro(seeds=seeds, env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
+    envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False)
+    rewardsRandom, detection_countRandom, exceedFOVRandom, last_envRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom, illegal_random = evaluate_agent_macro(seeds=seeds, env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
+    print("Reward - Random macro - DQN tracker")
+    print(sum(rewardsRandom)/len(rewardsRandom))
+    print(np.std([np.mean(arr) for arr in rewardsRandom], ddof=1))
+    print("Detections")
+    print(sum(detection_countRandom)/len(detection_countRandom))
+    print(np.std([np.mean(arr) for arr in detection_countRandom], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVRandom)/len(exceedFOVRandom))
+    print(np.std([np.mean(arr) for arr in exceedFOVRandom], ddof=1))
+    print("Known")
+    print(sum(knownRandom)/len(knownRandom))
+    print(np.std([np.mean(arr) for arr in knownRandom], ddof=1))
+    print("Illegal")
+    print(sum(illegal_random)/len(illegal_random))
+    print(np.std([np.mean(arr) for arr in illegal_random], ddof=1))
 
-    envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
-    ppo_model = PPO.load("agents/ppo_macro_trained_longer", env=envPPO)
-    rewardsPPO, detection_countPPO, exceedFOVPPO, last_envPPO, last_episode_logPPO, knownPPO, last_tasks_logPPO = evaluate_agent_macro(seeds=seeds, env=envPPO, model=ppo_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
+    envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False)
+    ppo_model = PPO.load("agents/ppo_macro_trained_dqn_track", env=envPPO)
+    rewardsPPO, detection_countPPO, exceedFOVPPO, last_envPPO, last_episode_logPPO, knownPPO, last_tasks_logPPO, illegal_ppo = evaluate_agent_macro(seeds=seeds, env=envPPO, model=ppo_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
+    print("Reward - PPO macro - DQN tracker")
+    print(sum(rewardsPPO)/len(rewardsPPO))
+    print(np.std([np.mean(arr) for arr in rewardsPPO], ddof=1))
+    print("Detections")
+    print(sum(detection_countPPO)/len(detection_countPPO))
+    print(np.std([np.mean(arr) for arr in detection_countPPO], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVPPO)/len(exceedFOVPPO))
+    print(np.std([np.mean(arr) for arr in exceedFOVPPO], ddof=1))
+    print("Known")
+    print(sum(knownPPO)/len(knownPPO))
+    print(np.std([np.mean(arr) for arr in knownPPO], ddof=1))
+    print("Illegal")
+    print(sum(illegal_ppo)/len(illegal_ppo))
+    print(np.std([np.mean(arr) for arr in illegal_ppo], ddof=1))
 
-    envDQN = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
-    dqn_model = DQN.load("agents/dqn_macro_trained_rewardLengthObs", env=envDQN)
-    rewardsDQN, detection_countDQN, exceedFOVDQN, last_envDQN, last_episode_logDQN, knownDQN, last_tasks_logDQN = evaluate_agent_macro(seeds=seeds, env=envDQN, model=dqn_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
+    envDQN = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False)
+    dqn_model = DQN.load("agents/dqn_macro_trained_dqn_track", env=envDQN)
+    rewardsDQN, detection_countDQN, exceedFOVDQN, last_envDQN, last_episode_logDQN, knownDQN, last_tasks_logDQN, illegal_dqn = evaluate_agent_macro(seeds=seeds, env=envDQN, model=dqn_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
+    print("Reward - DQN macro - DQN tracker")
+    print(sum(rewardsDQN)/len(rewardsDQN))
+    print(np.std([np.mean(arr) for arr in rewardsDQN], ddof=1))
+    print("Detections")
+    print(sum(detection_countDQN)/len(detection_countDQN))
+    print(np.std([np.mean(arr) for arr in detection_countDQN], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVDQN)/len(exceedFOVDQN))
+    print(np.std([np.mean(arr) for arr in exceedFOVDQN], ddof=1))
+    print("Known")
+    print(sum(knownDQN)/len(knownDQN))
+    print(np.std([np.mean(arr) for arr in knownDQN], ddof=1))
+    print("Illegal")
+    print(sum(illegal_dqn)/len(illegal_dqn))
+    print(np.std([np.mean(arr) for arr in illegal_dqn], ddof=1))
 
     #plot_pareto(detection_countMcts, exceedFOVMcts)
 
@@ -327,6 +579,16 @@ if __name__ == "__main__":
         #"MCTS": detection_countMcts
     }
     plot_violin(detection_results, ylabel="Number of Detections")
+
+    # ****** Plot illegal actions distributions ******
+    illegal_results = {
+        "Random": illegal_random,
+        "PPO": illegal_ppo,
+        "Heuristic": illegal_heuristic,
+        "DQN": illegal_dqn,
+        #"MCTS": detection_countMcts
+    }
+    plot_violin(illegal_results, ylabel="Number of Illegal Actions")
 
     # ****** Plot total target lost ******
     #plot_means_lost_targets(ppo=exceedFOVPPO, knownPPO=knownPPO, dqn=[], knownDQN=[], random=exceedFOVRandom, knownRandom=knownRandom, det=[], knowndet=[])
@@ -356,8 +618,129 @@ if __name__ == "__main__":
         'Random': 'red',
         'Heuristic': 'green',
     }
-)
+    )
 
+
+    # Heuristic tracker
+    envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True)
+    rewardsHeuristic, detection_countHeuristic, exceedFOVHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristic, last_tasks_logHeuristic, illegal_heuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    print("Reward - Heuristic macro - Heuristic tracker")
+    print(sum(rewardsHeuristic)/len(rewardsHeuristic))
+    print(np.std([np.mean(arr) for arr in rewardsHeuristic], ddof=1))
+    print("Detections")
+    print(sum(detection_countHeuristic)/len(detection_countHeuristic))
+    print(np.std([np.mean(arr) for arr in detection_countHeuristic], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVHeuristic)/len(exceedFOVHeuristic))
+    print(np.std([np.mean(arr) for arr in exceedFOVHeuristic], ddof=1))
+    print("Known")
+    print(sum(knownHeuristic)/len(knownHeuristic))
+    print(np.std([np.mean(arr) for arr in knownHeuristic], ddof=1))
+    print("Illegal")
+    print(sum(illegal_heuristic)/len(illegal_heuristic))
+    print(np.std([np.mean(arr) for arr in illegal_heuristic], ddof=1))
+
+    envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True)
+    rewardsRandom, detection_countRandom, exceedFOVRandom, last_envRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom, illegal_random = evaluate_agent_macro(seeds=seeds, env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
+    print("Reward - Random macro - Heuristic tracker")
+    print(sum(rewardsRandom)/len(rewardsRandom))
+    print(np.std([np.mean(arr) for arr in rewardsRandom], ddof=1))
+    print("Detections")
+    print(sum(detection_countRandom)/len(detection_countRandom))
+    print(np.std([np.mean(arr) for arr in detection_countRandom], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVRandom)/len(exceedFOVRandom))
+    print(np.std([np.mean(arr) for arr in exceedFOVRandom], ddof=1))
+    print("Known")
+    print(sum(knownRandom)/len(knownRandom))
+    print(np.std([np.mean(arr) for arr in knownRandom], ddof=1))
+    print("Illegal")
+    print(sum(illegal_random)/len(illegal_random))
+    print(np.std([np.mean(arr) for arr in illegal_random], ddof=1))
+
+    envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True)
+    ppo_model = PPO.load("agents/ppo_macro_trained", env=envPPO)
+    rewardsPPO, detection_countPPO, exceedFOVPPO, last_envPPO, last_episode_logPPO, knownPPO, last_tasks_logPPO, illegal_ppo = evaluate_agent_macro(seeds=seeds, env=envPPO, model=ppo_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
+    print("Reward - PPO macro - Heuristic tracker")
+    print(sum(rewardsPPO)/len(rewardsPPO))
+    print(np.std([np.mean(arr) for arr in rewardsPPO], ddof=1))
+    print("Detections")
+    print(sum(detection_countPPO)/len(detection_countPPO))
+    print(np.std([np.mean(arr) for arr in detection_countPPO], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVPPO)/len(exceedFOVPPO))
+    print(np.std([np.mean(arr) for arr in exceedFOVPPO], ddof=1))
+    print("Known")
+    print(sum(knownPPO)/len(knownPPO))
+    print(np.std([np.mean(arr) for arr in knownPPO], ddof=1))
+    print("Illegal")
+    print(sum(illegal_ppo)/len(illegal_ppo))
+    print(np.std([np.mean(arr) for arr in illegal_ppo], ddof=1))
+
+    envDQN = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True)
+    dqn_model = DQN.load("agents/dqn_macro_trained", env=envDQN)
+    rewardsDQN, detection_countDQN, exceedFOVDQN, last_envDQN, last_episode_logDQN, knownDQN, last_tasks_logDQN, illegal_dqn = evaluate_agent_macro(seeds=seeds, env=envDQN, model=dqn_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
+    print("Reward - DQN macro - Heuristic tracker")
+    print(sum(rewardsDQN)/len(rewardsDQN))
+    print(np.std([np.mean(arr) for arr in rewardsDQN], ddof=1))
+    print("Detections")
+    print(sum(detection_countDQN)/len(detection_countDQN))
+    print(np.std([np.mean(arr) for arr in detection_countDQN], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVDQN)/len(exceedFOVDQN))
+    print(np.std([np.mean(arr) for arr in exceedFOVDQN], ddof=1))
+    print("Known")
+    print(sum(knownDQN)/len(knownDQN))
+    print(np.std([np.mean(arr) for arr in knownDQN], ddof=1))
+    print("Illegal")
+    print(sum(illegal_dqn)/len(illegal_dqn))
+    print(np.std([np.mean(arr) for arr in illegal_dqn], ddof=1))
+
+    #plot_pareto(detection_countMcts, exceedFOVMcts)
+
+    # ****** Plot reward distributions ******
+    reward_results = {
+        "Random": rewardsRandom,
+        "PPO": rewardsPPO,
+        "Heuristic": rewardsHeuristic,
+        "DQN": rewardsDQN
+        #"MCTS": rewardsMcts
+    }
+    plot_violin(reward_results, ylabel="Episode Reward")
+
+    # ****** Plot detection distributions ******
+    detection_results = {
+        "Random": detection_countRandom,
+        "PPO": detection_countPPO,
+        "Heuristic": detection_countHeuristic,
+        "DQN": detection_countDQN,
+        #"MCTS": detection_countMcts
+    }
+    plot_violin(detection_results, ylabel="Number of Detections")
+
+    # ****** Plot illegal actions distributions ******
+    illegal_results = {
+        "Random": illegal_random,
+        "PPO": illegal_ppo,
+        "Heuristic": illegal_heuristic,
+        "DQN": illegal_dqn,
+        #"MCTS": detection_countMcts
+    }
+    plot_violin(illegal_results, ylabel="Number of Illegal Actions")
+
+    # ****** Plot total target lost ******
+    #plot_means_lost_targets(ppo=exceedFOVPPO, knownPPO=knownPPO, dqn=[], knownDQN=[], random=exceedFOVRandom, knownRandom=knownRandom, det=[], knowndet=[])
+    plot_means_lost_targets(ppo=exceedFOVPPO, knownPPO=knownPPO, dqn=exceedFOVDQN, knownDQN=knownDQN, random=exceedFOVRandom, knownRandom=knownRandom, det=exceedFOVHeuristic, knowndet=knownHeuristic)
+
+    # ****** Plot time spent on task ******
+    plot_task_log(last_tasks_logRandom, title="Random Policy - Action Timeline")
+    plot_task_log(last_tasks_logPPO, title="PPO - Action Timeline")
+    plot_task_log(last_tasks_logDQN, title="DQN - Action Timeline")
+    plot_task_log(last_tasks_logHeuristic, title="Heuristic - Action Timeline")
+
+if __name__ == "__main__":
+    #main()
+    rmsePlot()
 
 
     
