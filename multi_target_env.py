@@ -7,7 +7,7 @@ from scipy.linalg import expm
 class MultiTargetEnv(gym.Env):
     def __init__(self, n_targets=5, n_unknown_targets = 100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined"):
         super().__init__()
-        self.init_n_target = n_targets
+        self.init_n_targets = n_targets
         self.init_n_unknown_target = n_unknown_targets
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
@@ -35,7 +35,7 @@ class MultiTargetEnv(gym.Env):
         # Cholesky size for covariance packing
         self.cholesky_size = d_state * (d_state + 1) // 2
         self.obs_dim_per_target = d_state + self.cholesky_size
-        self.max_targets = self.init_n_target + self.init_n_unknown_target
+        self.max_targets = self.init_n_targets + self.init_n_unknown_target
 
         # Default initial covariance for new tracks (make accessible as self.P0)
         self.P0 = np.eye(self.d_state) * 0.2
@@ -105,7 +105,7 @@ class MultiTargetEnv(gym.Env):
         super().reset(seed=seed)
 
         self.step_count = 0
-        self.n_targets = self.init_n_target
+        self.n_targets = self.init_n_targets
         self.n_unknown_targets = self.init_n_unknown_target
         self.lost_counter = 0
         self.detect_counter = 0
@@ -114,9 +114,9 @@ class MultiTargetEnv(gym.Env):
         self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
         self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets) 
 
-        self.targets = [self._init_target(i) for i in range(self.init_n_target)]
+        self.targets = [self._init_target(i) for i in range(self.init_n_targets)]
         self.unknown_targets = [
-            self._init_unknown_target(i + self.init_n_target)
+            self._init_unknown_target(i + self.init_n_targets)
             for i in range(self.init_n_unknown_target)
         ]
         self.visit_counts[:] = 0   # reset search visit counts
@@ -190,7 +190,7 @@ class MultiTargetEnv(gym.Env):
     def step(self, action):
         macro, micro_search, micro_track = self.decode_action(action)
         micro = [0., 0.]
-        target_id = None
+        target_id = []
         search_pos = None
 
         if macro == 0:  # SEARCH
@@ -198,8 +198,8 @@ class MultiTargetEnv(gym.Env):
             search_pos = self.grid_coords[grid_idx]
             micro = search_pos
         else:  # TRACK
-            target_id = micro_track 
-            micro = target_id
+            target_id.append(micro_track) 
+            micro = micro_track
 
         # Initialise reward
         total_iG = 0.0
@@ -239,7 +239,7 @@ class MultiTargetEnv(gym.Env):
             tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
 
             # compute measurement related to action
-            if target_id is not None and idx == target_id:
+            if target_id and idx == micro:
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R)
                 iG = compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
@@ -282,7 +282,7 @@ class MultiTargetEnv(gym.Env):
             utgt['x'], utgt['P'] = MultiTargetEnv.propagate_target_2D(utgt['x'], utgt['P'], utgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
 
         # If TRACK macro, return here            
-        if target_id is not None:       
+        if target_id:       
             # Construct next observation
             obs = self._get_obs(target_id)
             self.step_count += 1
@@ -358,6 +358,7 @@ class MultiTargetEnv(gym.Env):
                     total_iG += 10.0
                     # Promote detection to a new known target
                     self._add_new_tracking_target(det['id'])
+                    target_id.append(det['id'])
                     
         # --- SEARCH macro: update visit counts and compute reward ---
         self.visit_counts[grid_idx] += 1
