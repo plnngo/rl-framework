@@ -23,20 +23,8 @@ class MacroEnv(gym.Env):
 
     def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0,
                  d_state=4, fov_size=4.0, max_steps=100,
-                 search_agent=None, track_agent=None, seed=None):
+                 search_agent=None, track_agent=None, seed=None, heuristicTracker=False):
         super().__init__()
-
-        # --------------------
-        # Base environment (combined mode)
-        # --------------------
-        """ self.base_env = MultiTargetEnv(n_targets=n_targets,
-                                       n_unknown_targets=n_unknown_targets,
-                                       space_size=space_size,
-                                       d_state=d_state,
-                                       fov_size=fov_size,
-                                       max_steps=max_steps,
-                                       seed=seed,
-                                       mode="track") """
 
         # --------------------
         # Micro agents (provided externally)
@@ -80,10 +68,14 @@ class MacroEnv(gym.Env):
         n_grid = max(1, int(np.floor(self.space_size / self.fov_size)))
         self.n_grid_cells = n_grid * n_grid
         self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)
+        self.heuristicTracker = heuristicTracker
         # --------------------
         # Micro environments (created internally)
         # --------------------
         self.search_env = search_agent.get_env().envs[0]
+        """ if track_agent == None:
+            self.track_env  = None
+        else: """
         self.track_env  = track_agent.get_env().envs[0]
 
     # ---------------------------------------------------------------------
@@ -243,8 +235,10 @@ class MacroEnv(gym.Env):
 
         else:
             obs = real_track_env.obs
-            #micro_action, _ = self.track_agent.predict(obs, deterministic=False)
-            micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
+            if self.heuristicTracker:
+                micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
+            else:
+                micro_action, _ = self.track_agent.predict(obs, deterministic=False)
             next_obs, micro_reward, done, truncated, info = real_track_env.step(micro_action)
             """ trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
             if any(trackingNeeded):
