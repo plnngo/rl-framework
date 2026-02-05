@@ -581,7 +581,7 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
             t += 1  # increment timestep
 
         rewards.append(total_reward)
-        exceedFOV.append(env.init_n_target-env.n_targets)
+        exceedFOV.append(env.init_n_targets-env.n_targets)
         illegal_actions.append(illegal_action)
 
         # --- For last episode, store deep copy of env ---
@@ -1215,19 +1215,41 @@ def extract_tracks_from_log(last_episode_log, n_targets=5):
 
 def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
     errors_all_targets = []
+    total_trace_cov = []
     for tgt_id, track in tracks.items():
-        print("Plot errors for target " + str(tgt_id))
+        #print("Plot errors for target " + str(tgt_id))
 
         # --- Extract data from track ---
         timesteps = [obs["t"] for obs in track]
-
-        # Skip this target if there are no timesteps/measurements
-        if not timesteps:   # or: if len(timesteps) == 0:
+        if not timesteps and tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
             continue
-        else:
-            all_tgt_meas = all_meas[tgt_id]
-            tgt_meas = all_tgt_meas[timesteps, :]
+        all_tgt_meas = all_meas[tgt_id]
+        tgt_meas = all_tgt_meas[timesteps, :]
+        if tgt_id < last_env.init_n_targets:
             for tgt in last_env.targets.copy():
+                    tid = tgt['id']
+                    if tid == tgt_id:
+                        motion = last_env.motion_model[tgt_id]
+                        if motion == "L":
+                            inputs = {
+                                "Rk": R,
+                                "Q": Q,
+                                "Po": tgt['P']
+                            }
+                            integrationFcn = KalmanFilter.int_constant_velocity_stm
+                            
+                        else:
+                            omega = last_env.motion_params[tgt_id]
+                            inputs = {
+                                "Rk": R,
+                                "Q": Q,
+                                "Po": tgt['P'],
+                                "omega": omega
+                            }
+                            integrationFcn = KalmanFilter.int_constant_turn_stm_2D
+                        break
+        else:
+            for tgt in last_env.unknown_targets.copy():
                 tid = tgt['id']
                 if tid == tgt_id:
                     motion = last_env.motion_model[tgt_id]
@@ -1249,65 +1271,110 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
                         }
                         integrationFcn = KalmanFilter.int_constant_turn_stm_2D
                     break
-            Xk, Pk, resids = KalmanFilter.ckf(
-                            Xo_ref = tgt['x'],          # shape (4,)
-                            t_obs  = timesteps,         # shape (L,)
-                            obs    = tgt_meas,          # shape (p, L)
-                            intfcn = integrationFcn,
-                            H_fcn  = MultiTargetEnv.extract_measurement,   # must be callable
-                            inputs = inputs
-                        )
-            all_tgt_states = all_target_states[tgt_id]
-            tgt_states_with_velocity = all_tgt_states[timesteps, :]
-            tgt_states = tgt_states_with_velocity.T[:4, :]
-            error = tgt_states - Xk
-            errors_all_targets.append(error)
-            pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2
-)
-            three_sigma_x  = 3.0 * np.sqrt(Pk[0, 0, :])
-            three_sigma_y  = 3.0 * np.sqrt(Pk[1, 1, :])
-            three_sigma_vx = 3.0 * np.sqrt(Pk[2, 2, :])
-            three_sigma_vy = 3.0 * np.sqrt(Pk[3, 3, :])
-            three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:])
 
-            t = timesteps
+        t_all, Xk_mat, P_mat, resids = KalmanFilter.ckf_predict_update(
+                                        Xo_ref = tgt['x'],          # shape (4,)
+                                        t_obs  = timesteps,         # shape (L,)
+                                        tend   = last_env.max_steps,
+                                        obs    = tgt_meas,          # shape (p, L)
+                                        intfcn = integrationFcn,
+                                        H_fcn  = MultiTargetEnv.extract_measurement,   # must be callable
+                                        inputs = inputs
+                                        )
+        all_tgt_states = all_target_states[tgt_id]
+        tgt_states_with_velocity = all_tgt_states[t_all, :]
+        tgt_states = tgt_states_with_velocity.T[:4, :]
+        error = tgt_states - Xk_mat
+        #total_error_all_targets.append(error)
+        pos_error = np.sqrt((tgt_states[0, :] - Xk_mat[0, :])**2 + (tgt_states[1, :] - Xk_mat[1, :])**2)
+        three_sigma_pos = 3.0 * np.sqrt(P_mat[0,0,:] + P_mat[1,1,:])
+        trace_P = np.trace(P_mat, axis1=0, axis2=1)
+        trace_P_pos = np.trace(P_mat[0:2, 0:2, :], axis1=0, axis2=1)
+        if timesteps:
+            selected_traces = trace_P_pos[timesteps[0]:]
+        else:
+            selected_traces = trace_P_pos
+        total_trace_cov.append(selected_traces)
 
-            """ plt.figure()
-            plt.plot(t, three_sigma_x, label="+3σ x")
-            plt.plot(t, -three_sigma_x, label="-3σ x")
-            plt.scatter(t, error[0, :], label="X error")
-            plt.xlabel("Time")
-            plt.ylabel("Position uncertainty")
-            plt.legend()
-            plt.grid(True)
-            plt.show()
+        """ plt.figure()
+        plt.plot(t_all, three_sigma_pos, label="+3σ x")
+        plt.plot(t_all, -three_sigma_pos, label="-3σ x")
+        plt.scatter(t_all, pos_error, label="Positional error")
+        plt.xlabel("Time")
+        plt.ylabel("Position uncertainty")
+        plt.legend()
+        plt.grid(True)
+        plt.show() """
 
-            plt.figure()
-            plt.plot(t, three_sigma_y, label="+3σ x")
-            plt.plot(t, -three_sigma_y, label="-3σ x")
-            plt.scatter(t, error[1, :], label="Y error")
-            plt.xlabel("Time")
-            plt.ylabel("Position uncertainty")
-            plt.legend()
-            plt.grid(True)
-            plt.show() """
+        """ # Skip this target if there are no timesteps/measurements
+        if not timesteps:   # or: if len(timesteps) == 0:
+            continue
+        else: """
+            
+        Xk, Pk, resids = KalmanFilter.ckf(
+                        Xo_ref = tgt['x'],          # shape (4,)
+                        t_obs  = timesteps,         # shape (L,)
+                        obs    = tgt_meas,          # shape (p, L)
+                        intfcn = integrationFcn,
+                        H_fcn  = MultiTargetEnv.extract_measurement,   # must be callable
+                        inputs = inputs
+                    )
+        all_tgt_states = all_target_states[tgt_id]
+        tgt_states_with_velocity = all_tgt_states[timesteps, :]
+        tgt_states = tgt_states_with_velocity.T[:4, :]
+        error = tgt_states - Xk
+        errors_all_targets.append(error)
+        pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
+        three_sigma_x  = 3.0 * np.sqrt(Pk[0, 0, :])
+        three_sigma_y  = 3.0 * np.sqrt(Pk[1, 1, :])
+        three_sigma_vx = 3.0 * np.sqrt(Pk[2, 2, :])
+        three_sigma_vy = 3.0 * np.sqrt(Pk[3, 3, :])
+        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:])
 
-            """ plt.figure()
-            plt.plot(t, three_sigma_pos, label="+3σ x")
-            plt.plot(t, -three_sigma_pos, label="-3σ x")
-            plt.scatter(t, pos_error, label="Positional error")
-            plt.xlabel("Time")
-            plt.ylabel("Position uncertainty")
-            plt.legend()
-            plt.grid(True)
-            plt.show() """
-    return errors_all_targets
+        t = timesteps
 
-def computeRMSEalgo(heuristic=False, env=None, n_episodes=100, sigma_theta=0, sigma_r=0, R=None, Q=None):
+        """ plt.figure()
+        plt.plot(t, three_sigma_x, label="+3σ x")
+        plt.plot(t, -three_sigma_x, label="-3σ x")
+        plt.scatter(t, error[0, :], label="X error")
+        plt.xlabel("Time")
+        plt.ylabel("Position uncertainty")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+        plt.figure()
+        plt.plot(t, three_sigma_y, label="+3σ x")
+        plt.plot(t, -three_sigma_y, label="-3σ x")
+        plt.scatter(t, error[1, :], label="Y error")
+        plt.xlabel("Time")
+        plt.ylabel("Position uncertainty")
+        plt.legend()
+        plt.grid(True)
+        plt.show() """
+
+        """ plt.figure()
+        plt.plot(t, three_sigma_pos, label="+3σ x")
+        plt.plot(t, -three_sigma_pos, label="-3σ x")
+        plt.scatter(t, pos_error, label="Positional error")
+        plt.xlabel("Time")
+        plt.ylabel("Position uncertainty")
+        plt.legend()
+        plt.grid(True)
+        plt.show() """
+
+    return errors_all_targets, total_trace_cov
+
+def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episodes=100, sigma_theta=0, sigma_r=0, R=None, Q=None):
     error_episodes = []
+    total_error_episodes = []
     for i in range(n_episodes):
-        if heuristic:
-            det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True)
+        if heuristic or random:
+            det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=random, deterministic_policy=heuristic)
+        elif model=="ppo":
+            ppo_model = PPO.load("agents/ppo_track_trained_IEEE", env=env)
+            ppo_rewards, exceedFOV_ppo, last_env, last_episode_log, illegal_actions_ppo = evaluate_agent_track(env, model=ppo_model, n_episodes=1)
+
         else:
             dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
             dqn_rewards, exceedFOV_dqn, last_env, last_episode_log, illegal_actions_dqn = evaluate_agent_track(env, model=dqn_model, n_episodes=1)
@@ -1325,7 +1392,7 @@ def computeRMSEalgo(heuristic=False, env=None, n_episodes=100, sigma_theta=0, si
             measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
             all_meas[tid] = measurements
 
-        errors_all_targets = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q)
+        errors_all_targets, total_error_all_targets = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q)
 
         episode_error = 0
         for tgt_error in errors_all_targets:
@@ -1334,16 +1401,34 @@ def computeRMSEalgo(heuristic=False, env=None, n_episodes=100, sigma_theta=0, si
             sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
             rmse_target = np.sqrt(np.mean(sq_err))
             episode_error = episode_error + rmse_target
-        rmse_all_target = episode_error/len(errors_all_targets)
-        error_episodes.append(rmse_all_target)
+        if len(errors_all_targets)>0:
+            rmse_all_target = episode_error/len(errors_all_targets)
+            error_episodes.append(rmse_all_target)
+
+        total_episode_error = np.sum(total_error_all_targets, axis=None)
+        """ total_episode_error = 0
+        for tgt_error in total_error_all_targets:
+            pos_error = tgt_error[:2, :]                  # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            total_rmse_target = np.sqrt(np.mean(sq_err))
+            total_episode_error = total_episode_error + total_rmse_target """
+        if len(total_error_all_targets)>0:
+            total_rmse_all_target = total_episode_error/len(total_error_all_targets)
+            total_error_episodes.append(total_rmse_all_target)
         env.reset()
 
     error_episodes = np.array(error_episodes)
-    mean_pos_error_all_episodes = sum(error_episodes)/len(error_episodes)
+    total_error_episodes = np.array(total_error_episodes)
 
-    print("Mean of positional errors over all episodes " + str(mean_pos_error_all_episodes) + " +- ")
-    print(np.std([np.mean(arr) for arr in error_episodes], ddof=1))
-    return error_episodes
+    if len(error_episodes)>0:
+        mean_pos_error_all_episodes = sum(error_episodes)/len(error_episodes)
+        print("Mean of positional errors over all episodes " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodes], ddof=1))
+    if len(total_error_episodes)>0:
+        mean_pos_total_error_all_episodes = sum(total_error_episodes)/len(total_error_episodes)
+        print("Mean of covariance trace over all episodes " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in total_error_episodes], ddof=1))
+    return error_episodes, total_error_episodes
 
 def rmsePlot():
     n_targets = 5
@@ -1358,17 +1443,42 @@ def rmsePlot():
     Q = np.eye(2) * 1e-17
 
     heuristic = True
-    errors_heuristic = computeRMSEalgo(heuristic, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    random = False
+    model = None
+    print("Heuristic starts")
+    errors_heuristic, total_errors_heuristic = computeRMSEalgo(heuristic, random, model, env, n_episodes, sigma_theta, sigma_r, R, Q)
     heuristic = False
-    errors_dqn = computeRMSEalgo(heuristic, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    random = False
+    model = "dqn"
+    print("DQN starts")
+    errors_dqn, total_errors_dqn = computeRMSEalgo(heuristic, random, model, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = False
+    model = "ppo"
+    print("PPO starts")
+    errors_ppo, total_errors_ppo = computeRMSEalgo(heuristic, random, model, env, n_episodes, sigma_theta, sigma_r, R, Q)
+    heuristic = False
+    random = True
+    model = None
+    print("Random starts")
+    errors_random, total_errors_random = computeRMSEalgo(heuristic, random, model, env, n_episodes, sigma_theta, sigma_r, R, Q)
+
 
     results = {
-        #"Random": errors_random,
-        #"PPO": errors_ppo,
+        "Random": errors_random,
+        "PPO": errors_ppo,
         "Heuristic": errors_heuristic,
         "DQN" : errors_dqn
     }
     plot_violin(results, ylabel="Positional Error")
+
+    results = {
+        "Random": total_errors_random,
+        "PPO": total_errors_ppo,
+        "Heuristic": total_errors_heuristic,
+        "DQN" : total_errors_dqn
+    }
+    plot_violin(results, ylabel="Total Positional Error")
     
 
 
@@ -1438,10 +1548,10 @@ def main():
 #def anotherMethod():
     seeds = [42, 123, 321]
 
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
     n_episodes = 100
 
-    """ # ****** Search ******
+    # ****** Search ******
     # ****** Random policy ******
     random_rewards, random_detections = evaluate_agent_search(env, n_episodes=n_episodes, random_policy=True, seed=seeds)
     print("Reward")
@@ -1464,7 +1574,7 @@ def main():
 
     # ****** DQN agent ******
     env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
-    dqn_model = DQN.load("agents/dqn_search_trained_allRewards_IEEE", env=env)
+    dqn_model = DQN.load("agents/dqn_search_trained_IEEE2", env=env)
     dqn_rewards, dqn_detections = evaluate_agent_search(env, model=dqn_model, n_episodes=n_episodes, seed=seeds)
     print("Reward")
     print(sum(dqn_rewards)/len(dqn_rewards))
@@ -1487,9 +1597,9 @@ def main():
         "PPO": ppo_detections,
         "DQN": dqn_detections
     }
-    plot_violin(detection_results, ylabel="Number of Detections") """
+    plot_violin(detection_results, ylabel="Number of Detections")
 
-    # ****** Track ******
+    """ # ****** Track ******
     # ****** Deterministic policy ******
     det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
     print("Illegal action")
@@ -1515,7 +1625,7 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_random], ddof=1))
     print("Reward")
     print(sum(random_rewards)/len(random_rewards))
-    print(np.std([np.mean(arr) for arr in random_rewards], ddof=1))
+    print(np.std([np.mean(arr) for arr in random_rewards], ddof=1)) """
     """ tracks = extract_tracks_from_log(last_episode_log)
     estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
@@ -1530,7 +1640,7 @@ def main():
             target_id=i
         ) """
  
-    # ****** PPO agent ******
+    """ # ****** PPO agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
@@ -1545,7 +1655,7 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_ppo], ddof=1))
     print("Reward")
     print(sum(ppo_rewards)/len(ppo_rewards))
-    print(np.std([np.mean(arr) for arr in ppo_rewards], ddof=1))
+    print(np.std([np.mean(arr) for arr in ppo_rewards], ddof=1)) """
     """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
     """ tracks = extract_tracks_from_log(last_episode_log)
@@ -1563,7 +1673,7 @@ def main():
         ) """
  
 
-    # ****** DQN agent ******
+    """ # ****** DQN agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     obs = env.reset()
     dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
@@ -1581,7 +1691,7 @@ def main():
     print(np.std([np.mean(arr) for arr in dqn_rewards], ddof=1))
     visualize_initial_positions(last_env)
     print(last_env.motion_model) 
-    tracks = extract_tracks_from_log(last_episode_log)
+    tracks = extract_tracks_from_log(last_episode_log) """
     """ estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
     truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
@@ -1609,6 +1719,6 @@ def main():
  """
  
 if __name__ == "__main__":
-    main()
+    #main()
     #kalmanPlots()
-    #rmsePlot()
+    rmsePlot()

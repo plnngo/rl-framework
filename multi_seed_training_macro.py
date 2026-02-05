@@ -46,12 +46,12 @@ class MacroRandomSeedEnv(gym.Env):
         self.init_n_unknown_target = n_unknown_targets
 
         # Build initial env to expose observation and action space
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)))
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)), heuristicTracker=False)
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
 
     # Build a MacroEnv for a given seed
-    def _make_env(n_targets, n_unknown_targets, seed):
+    def _make_env(n_targets, n_unknown_targets, seed, heuristicTracker=False):
         env_search = MultiTargetEnv(
             n_targets=n_targets, n_unknown_targets=n_unknown_targets,
             seed=seed, mode="search"
@@ -61,6 +61,10 @@ class MacroRandomSeedEnv(gym.Env):
             seed=seed, mode="track"
         )
         search_agent = PPO.load("agents/ppo_search_trained_IEEE", env=env_search)
+        """ if heuristicTracker:
+            track_agent = None
+        else:
+             """
         track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
 
         return MacroEnv(
@@ -68,12 +72,13 @@ class MacroRandomSeedEnv(gym.Env):
             n_unknown_targets=n_unknown_targets,
             search_agent=search_agent,
             track_agent=track_agent,
-            seed=seed
+            seed=seed,
+            heuristicTracker=heuristicTracker
         )
 
     def reset(self, **kwargs):
         seed = int(np.random.choice(self.seed_list))
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed)
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed, heuristicTracker=False)
         return self.env.reset(seed=seed)
 
     def step(self, action):
@@ -103,16 +108,16 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = PPO(
             "MlpPolicy",
             env,
-            learning_rate=0.0003568750531511821,
-            n_steps=512,
+            learning_rate=0.00044614011815097786, #0.0003568750531511821,
+            n_steps=384, #512,
             batch_size=128,
-            gamma=0.9286417039953475,
-            gae_lambda=0.9413945148574974,
-            clip_range=0.15498735004187073,
-            ent_coef=0.03513597942956761,
-            vf_coef=0.6977889828322719,
-            max_grad_norm=0.9820965340387906,
-            policy_kwargs=dict(net_arch=[64, 64]),
+            gamma=0.952199041429737, #0.9286417039953475,
+            gae_lambda=0.9180541616290008, #0.9413945148574974,
+            clip_range=0.12790513745344512,#0.15498735004187073,
+            ent_coef=0.03565509800026144, #0.03513597942956761,
+            vf_coef=0.8845018186381477, #0.6977889828322719,
+            max_grad_norm=0.9464008722411874, #0.9820965340387906,
+            policy_kwargs=dict(net_arch=[128, 64]),#dict(net_arch=[64, 64]),
             verbose=1,
         )
 
@@ -121,18 +126,18 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            learning_rate=0.00010917134021893014,
-            buffer_size=20_000,
-            batch_size=64,
-            gamma=0.965849106792237,
+            learning_rate=8.450225441659817e-05, #0.00010917134021893014,
+            buffer_size=50000, #20_000,
+            batch_size=32, #64,
+            gamma=0.9564895579103538, #0.965849106792237,
             train_freq=4,
             gradient_steps=8,
             learning_starts=5000,
-            exploration_fraction=0.3908456292795791,
-            exploration_final_eps=0.05447874562759111,
-            target_update_interval=5_000,
-            max_grad_norm=1.058094230288445,
-            policy_kwargs=dict(net_arch=[256, 256]),
+            exploration_fraction=0.6439219138656918, #0.3908456292795791,
+            exploration_final_eps=0.02838206605656649,  #0.05447874562759111,
+            target_update_interval=15000, #5_000,
+            max_grad_norm=1.805905030739738, #1.058094230288445,
+            policy_kwargs=dict(net_arch=[128, 128]), #dict(net_arch=[256, 256]),
             verbose=1,
         )
 
@@ -151,7 +156,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     model.learn(total_timesteps=total_timesteps, callback=callback)
 
     # Save the model
-    model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained.zip")
+    model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained_dqn_track.zip")
     model.save(model_path)
     print(f"[{algo_name}] Model saved to {model_path}")
 
@@ -215,12 +220,12 @@ def main():
     # --- PPO ---
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # --- DQN ---
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)

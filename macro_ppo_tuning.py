@@ -124,7 +124,7 @@ def objective_macro_ppo(trial, shared_plotter=None):
     trial_name = f"trial_{trial.number}"
     color = cm.get_cmap("tab20")(trial.number % 20) if shared_plotter else None
 
-    seeds = [42, 123, 321]
+    seeds = [42] #[42, 123, 321]
     rewards = []
 
     for seed in seeds:

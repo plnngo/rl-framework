@@ -454,7 +454,7 @@ def generate_truth_states(t_vec, tgt_id, env):
     """
 
     # State dimension
-    n = env.targets[tgt_id]["x"].shape[0]
+    n = env.targets[0]["x"].shape[0]
     if env.motion_model[tgt_id] == "T":
         n = 5
     else:
@@ -466,7 +466,10 @@ def generate_truth_states(t_vec, tgt_id, env):
     H_mod = []
 
     # Initial state at t=0
-    x0 = env.targets[tgt_id]["x"].copy()
+    if tgt_id>=env.init_n_targets:
+        x0 = env.unknown_targets[tgt_id - env.init_n_targets]["x"].copy()
+    else:
+        x0 = env.targets[tgt_id]["x"].copy()
 
     if env.motion_model[tgt_id] == "T":     # CT model has ω (turn rate)
         x0 = np.append(x0, env.motion_params[tgt_id])

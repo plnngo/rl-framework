@@ -131,7 +131,7 @@ def objective(trial, shared_plotter=None):
         model = train_dqn(
             params,
             trial_name=f"{trial_name}_seed{seed}",
-            total_timesteps=40_000,
+            total_timesteps=50_000,
             plotter=shared_plotter,
             color=color,
             seed=seed,
