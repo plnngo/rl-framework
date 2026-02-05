@@ -139,6 +139,108 @@ def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
     return Xk_mat, P_mat, resids
 
+def ckf_predict_update(Xo_ref, t_obs, tend, obs, intfcn, H_fcn, inputs):
+    import numpy as np
+    from scipy.integrate import solve_ivp
+
+    # Dimensions
+    n = Xo_ref.size
+    p = obs.shape[1]
+
+    # Inputs
+    Rk = inputs["Rk"]
+    Q  = inputs["Q"]
+    Po = inputs["Po"]
+
+    # Build dense time grid
+    t_all = np.arange(tend)
+    L_all = len(t_all)
+
+    # Map measurements to times
+    meas_dict = {t_obs[k]: obs[k, :] for k in range(len(t_obs))}
+
+    # Initialization
+    xhat = np.zeros(n)
+    P = Po.copy()
+    Xref = Xo_ref.copy()
+
+    # Storage
+    Xk_mat = np.zeros((n, L_all))
+    P_mat = np.zeros((n, n, L_all))
+    resids = np.full((p, L_all), np.nan)
+
+    # STM initialization
+    phi0 = np.eye(n).reshape(n * n)
+
+    ode_tol = 1e-12
+
+    # Main loop over *all* time steps
+    for k in range(L_all):
+
+        t = t_all[k]
+        t_prior = t if k == 0 else t_all[k - 1]
+        dt = t - t_prior
+
+        # -------------------------
+        # Propagation
+        # -------------------------
+        int0 = np.hstack((Xref, phi0))
+
+        if dt > 0:
+            sol = solve_ivp(
+                fun=lambda tau, y: intfcn(tau, y, inputs),
+                t_span=(t_prior, t),
+                y0=int0,
+                rtol=ode_tol,
+                atol=ode_tol
+            )
+            xout = sol.y[:, -1]
+        else:
+            xout = int0
+
+        Xref = xout[:n]
+        phi = xout[n:].reshape((n, n))
+
+        # Process noise (2D CV)
+        Gamma = np.block([
+            [(dt**2 / 2) * np.eye(2)],
+            [dt * np.eye(2)]
+        ])
+
+        xbar = phi @ xhat
+        Pbar = phi @ P @ phi.T + Gamma @ Q @ Gamma.T
+
+        # -------------------------
+        # Measurement update (if available)
+        # -------------------------
+        if t in meas_dict:
+            Yk = meas_dict[t]
+
+            theta, r, Hk_til = H_fcn(Xref)
+            Gk = np.array([theta, r])
+            yk = Yk - Gk
+
+            S = Hk_til @ Pbar @ Hk_til.T + Rk
+            Kk = Pbar @ Hk_til.T @ np.linalg.inv(S)
+
+            xhat = xbar + Kk @ (yk - Hk_til @ xbar)
+            I = np.eye(n)
+            P = (I - Kk @ Hk_til) @ Pbar @ (I - Kk @ Hk_til).T + Kk @ Rk @ Kk.T
+
+            resids[:, k] = yk - Hk_til @ xhat
+
+        else:
+            # No measurement → prediction only
+            xhat = xbar
+            P = Pbar
+
+        # -------------------------
+        # Save estimate
+        # -------------------------
+        Xk_mat[:, k] = Xref + xhat
+        P_mat[:, :, k] = P
+
+    return t_all, Xk_mat, P_mat, resids
 
 def int_constant_velocity_stm(t, X, inputs):
     """
