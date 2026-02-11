@@ -4,6 +4,7 @@ import gymnasium as gym
 import matplotlib.cm as cm
 import pandas as pd
 
+from sb3_contrib import MaskablePPO
 from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.vec_env import DummyVecEnv
 
@@ -51,7 +52,7 @@ class MacroRandomSeedEnv(gym.Env):
         self.observation_space = self.env.observation_space
 
     # Build a MacroEnv for a given seed
-    def _make_env(n_targets, n_unknown_targets, seed, heuristicTracker=False):
+    def _make_env(n_targets, n_unknown_targets, seed, heuristicTracker=False, tracker=None):
         env_search = MultiTargetEnv(
             n_targets=n_targets, n_unknown_targets=n_unknown_targets,
             seed=seed, mode="search"
@@ -61,11 +62,10 @@ class MacroRandomSeedEnv(gym.Env):
             seed=seed, mode="track"
         )
         search_agent = PPO.load("agents/ppo_search_trained_IEEE", env=env_search)
-        """ if heuristicTracker:
-            track_agent = None
+        if tracker == "dqn":
+            track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
         else:
-             """
-        track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
+            track_agent = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env_track)
 
         return MacroEnv(
             n_targets=n_targets,
@@ -156,7 +156,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     model.learn(total_timesteps=total_timesteps, callback=callback)
 
     # Save the model
-    model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained_dqn_track.zip")
+    model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained_maskppo_track.zip")
     model.save(model_path)
     print(f"[{algo_name}] Model saved to {model_path}")
 

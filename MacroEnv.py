@@ -3,6 +3,8 @@ from gymnasium import spaces
 import numpy as np
 import copy
 
+from sb3_contrib import MaskablePPO
+
 from deterministic_tracker import select_best_action
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
@@ -238,7 +240,11 @@ class MacroEnv(gym.Env):
             if self.heuristicTracker:
                 micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
             else:
-                micro_action, _ = self.track_agent.predict(obs, deterministic=False)
+                if isinstance(self.track_agent, MaskablePPO):
+                    action_masks = real_track_env.action_masks()
+                    micro_action, _ = self.track_agent.predict(obs, action_masks=action_masks)
+                else:
+                    micro_action, _ = self.track_agent.predict(obs, deterministic=False)
             next_obs, micro_reward, done, truncated, info = real_track_env.step(micro_action)
             """ trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self)
             if any(trackingNeeded):
@@ -254,7 +260,7 @@ class MacroEnv(gym.Env):
         next_obs = self._get_obs()
         self.obs = next_obs
         macro_reward = sum(next_obs)
-        """ if info["lost_target"]:
+        if info["lost_target"]:
             self.step_count += 1
 
             reward = -100.0   
@@ -267,7 +273,7 @@ class MacroEnv(gym.Env):
                 "action_mask": self.get_action_mask()
             }
 
-            return next_obs, reward, done, truncated, info """
+            return next_obs, reward, done, truncated, info
         done = self.step_count >= self.max_steps
         return next_obs, macro_reward, done, truncated, info
 

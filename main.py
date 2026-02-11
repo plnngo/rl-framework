@@ -1,6 +1,7 @@
 import copy
 import random
 from matplotlib.colors import to_rgba
+from sb3_contrib import MaskablePPO
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 import KalmanFilter
@@ -522,7 +523,7 @@ def analyse_tracking_task(target_idx, env, confidence=0.95):
 
     return full_major > float(env.fov_size), x, P
 
-def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, deterministic_policy=False, seed=None):
+def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, deterministic_policy=False, seed=None, maskable=False):
     rewards = []
     exceedFOV = []
     illegal_actions = []
@@ -549,12 +550,16 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                 #action = 6
             elif deterministic_policy:
                 action, best_ig, best_update = select_best_action(env, env.dt)
+            elif maskable:
+                action_masks = env.action_masks()
+                action, _ = model.predict(obs, action_masks=action_masks)
+
             else:
                 action, _ = model.predict(obs, deterministic=False)
 
             # --- Step environment ---
             obs, reward, done, truncated, info = env.step(action)
-            if "invalid_action" in info and info["invalid_action"]:
+            if not info["action_mask"]["micro_track"][np.asarray(action).item()]:
                 illegal_action = illegal_action + 1
             total_reward += reward
 
@@ -569,9 +574,13 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                         exceed_target.append(tgt) """
 
                     # if this is the last episode, store everything
-                    if info.get("invalid_action") or info.get("catastrophic_loss"):
+                    if not info["action_mask"]["micro_track"][np.asarray(action).item()]:
+                        """ if info.get("invalid_action"):
+                            illegalActs += 1 """
                         continue
-                    if tgt == info["target_id"]:
+                    if tgt in info["target_id"]:
+                        if x is None:
+                            print("error")
                         episode_log[t][tgt] = {
                             "id": tgt,
                             "state": x.copy(),
@@ -756,7 +765,11 @@ def plot_violin(results_dict, ylabel="Episode Reward"):
         "DQN": "orange",
         "Random": "red",
         "Heuristic": "green",
-        "MCTS": "purple"
+        "MCTS": "purple",
+        "Maskable PPO": "grey",
+        "0.95": "blue",
+        "0.5": "orange",
+        "0.1": "red"
     }
     
     data = []
@@ -950,7 +963,7 @@ def plot_positions(positions, env=None, show_start_end=True):
     plt.show()
 
 @staticmethod
-def plot_means_lost_targets(ppo, knownPPO, dqn = [], knownDQN =[], random=[], knownRandom =[], det=[], knowndet=[]):
+def plot_means_lost_targets(ppo, knownPPO, dqn = [], knownDQN =[], random=[], knownRandom =[], det=[], knowndet=[], labels=None):
     """
     ppo, dqn, random are lists of arrays.
     Compute:
@@ -988,7 +1001,6 @@ def plot_means_lost_targets(ppo, knownPPO, dqn = [], knownDQN =[], random=[], kn
     ])
 
     # --- Plotting ---
-    labels = ["PPO", "DQN", "Random", "Heuristic"]
     x = np.arange(len(labels))
     colors = ["blue", "orange", "red", "green"]
     light_colors = [to_rgba(c, alpha=0.35) for c in colors]
@@ -1375,6 +1387,10 @@ def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episo
             ppo_model = PPO.load("agents/ppo_track_trained_IEEE", env=env)
             ppo_rewards, exceedFOV_ppo, last_env, last_episode_log, illegal_actions_ppo = evaluate_agent_track(env, model=ppo_model, n_episodes=1)
 
+        elif model=="maskableppo":
+            maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
+            maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=1, maskable=True)
+
         else:
             dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
             dqn_rewards, exceedFOV_dqn, last_env, last_episode_log, illegal_actions_dqn = evaluate_agent_track(env, model=dqn_model, n_episodes=1)
@@ -1392,28 +1408,33 @@ def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episo
             measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
             all_meas[tid] = measurements
 
-        errors_all_targets, total_error_all_targets = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q)
+        errors_all_targets, total_trace_cov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q)
 
         episode_error = 0
         for tgt_error in errors_all_targets:
             # tgt_error shape: (state_dim, T_i)
             pos_error = tgt_error[:2, :]                  # (2, T_i)
             sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            if len(sq_err) == 0:
+                continue    # target has not been tracked at all
             rmse_target = np.sqrt(np.mean(sq_err))
             episode_error = episode_error + rmse_target
         if len(errors_all_targets)>0:
             rmse_all_target = episode_error/len(errors_all_targets)
-            error_episodes.append(rmse_all_target)
+            if not np.isnan(rmse_all_target): 
+                error_episodes.append(rmse_all_target)
+            else:
+                print("error is nan")
 
-        total_episode_error = np.sum(total_error_all_targets, axis=None)
+        total_episode_trace_cov = sum(np.sum(arr) for arr in total_trace_cov)
         """ total_episode_error = 0
         for tgt_error in total_error_all_targets:
             pos_error = tgt_error[:2, :]                  # (2, T_i)
             sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
             total_rmse_target = np.sqrt(np.mean(sq_err))
             total_episode_error = total_episode_error + total_rmse_target """
-        if len(total_error_all_targets)>0:
-            total_rmse_all_target = total_episode_error/len(total_error_all_targets)
+        if len(total_trace_cov)>0:
+            total_rmse_all_target = total_episode_trace_cov/len(total_trace_cov)
             total_error_episodes.append(total_rmse_all_target)
         env.reset()
 
@@ -1442,6 +1463,11 @@ def rmsePlot():
     R = np.diag([sigma_theta**2, sigma_r**2])
     Q = np.eye(2) * 1e-17
 
+    heuristic = False
+    random = False
+    model = "maskableppo"
+    print("Maskable PPO starts")
+    errors_maskppo, total_errors_maskppo = computeRMSEalgo(heuristic, random, model, env, n_episodes, sigma_theta, sigma_r, R, Q)
     heuristic = True
     random = False
     model = None
@@ -1468,7 +1494,8 @@ def rmsePlot():
         "Random": errors_random,
         "PPO": errors_ppo,
         "Heuristic": errors_heuristic,
-        "DQN" : errors_dqn
+        "DQN" : errors_dqn,
+        "Maskable PPO" : errors_maskppo
     }
     plot_violin(results, ylabel="Positional Error")
 
@@ -1476,7 +1503,8 @@ def rmsePlot():
         "Random": total_errors_random,
         "PPO": total_errors_ppo,
         "Heuristic": total_errors_heuristic,
-        "DQN" : total_errors_dqn
+        "DQN" : total_errors_dqn,
+        "Maskable PPO": total_errors_maskppo
     }
     plot_violin(results, ylabel="Total Positional Error")
     
@@ -1516,14 +1544,19 @@ def kalmanPlots():
     dqn_rewards, exceedFOV_dqn, last_env, last_episode_log, illegal_actions_dqn = evaluate_agent_track(env, model=dqn_model, n_episodes=n_episodes)
     tracks = extract_tracks_from_log(last_episode_log)
     estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q)
+
+    maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
+    env = last_env
+
     
-    obs = env.reset()
+    #obs = env.reset()
 
 
 def main():
     # ****** Test with random policy ******
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
+    n_episodes = 100
 
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
@@ -1546,7 +1579,7 @@ def main():
     visualize_trained_agent(env, model, n_steps=30) """
     
 #def anotherMethod():
-    seeds = [42, 123, 321]
+    """ seeds = [42, 123, 321]
 
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
     n_episodes = 100
@@ -1597,9 +1630,22 @@ def main():
         "PPO": ppo_detections,
         "DQN": dqn_detections
     }
-    plot_violin(detection_results, ylabel="Number of Detections")
+    plot_violin(detection_results, ylabel="Number of Detections") """
 
-    """ # ****** Track ******
+    # ****** Track ******
+    obs = env.reset()
+    maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
+    maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=n_episodes, deterministic_policy=False, maskable=True)
+    print("Illegal action")
+    print(sum(illegal_actions_maskppo)/len(illegal_actions_maskppo))
+    print(np.std([np.mean(arr) for arr in illegal_actions_maskppo], ddof=1))
+    print("Lost targets")
+    print(sum(exceedFOV_maskppo)/len(exceedFOV_maskppo))
+    print(np.std([np.mean(arr) for arr in exceedFOV_maskppo], ddof=1))
+    print("Reward")
+    print(sum(maskppo_rewards)/len(maskppo_rewards))
+    print(np.std([np.mean(arr) for arr in maskppo_rewards], ddof=1))
+
     # ****** Deterministic policy ******
     det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
     print("Illegal action")
@@ -1625,7 +1671,7 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_random], ddof=1))
     print("Reward")
     print(sum(random_rewards)/len(random_rewards))
-    print(np.std([np.mean(arr) for arr in random_rewards], ddof=1)) """
+    print(np.std([np.mean(arr) for arr in random_rewards], ddof=1))
     """ tracks = extract_tracks_from_log(last_episode_log)
     estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
@@ -1640,7 +1686,7 @@ def main():
             target_id=i
         ) """
  
-    """ # ****** PPO agent ******
+    # ****** PPO agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
@@ -1655,7 +1701,7 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_ppo], ddof=1))
     print("Reward")
     print(sum(ppo_rewards)/len(ppo_rewards))
-    print(np.std([np.mean(arr) for arr in ppo_rewards], ddof=1)) """
+    print(np.std([np.mean(arr) for arr in ppo_rewards], ddof=1))
     """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
     """ tracks = extract_tracks_from_log(last_episode_log)
@@ -1673,7 +1719,7 @@ def main():
         ) """
  
 
-    """ # ****** DQN agent ******
+    # ****** DQN agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     obs = env.reset()
     dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
@@ -1691,7 +1737,7 @@ def main():
     print(np.std([np.mean(arr) for arr in dqn_rewards], ddof=1))
     visualize_initial_positions(last_env)
     print(last_env.motion_model) 
-    tracks = extract_tracks_from_log(last_episode_log) """
+    tracks = extract_tracks_from_log(last_episode_log)
     """ estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
     truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \

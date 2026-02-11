@@ -1,8 +1,12 @@
+import math
 import gymnasium as gym
 import numpy as np
 from math import sqrt
 from scipy.stats import norm
 from scipy.linalg import expm
+from sb3_contrib.common.wrappers import ActionMasker
+from sb3_contrib import MaskablePPO
+from scipy.integrate import dblquad
 
 class MultiTargetEnv(gym.Env):
     def __init__(self, n_targets=5, n_unknown_targets = 100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined"):
@@ -72,6 +76,8 @@ class MultiTargetEnv(gym.Env):
         # New per-target dimension:
         if mode == "track":
             self.obs_dim_per_target = 1   # dx, dy, vx, vy, p_fov, known_mask
+            #self.obs_dim_per_target = 3
+
             #obs_len = self.init_n_target * self.obs_dim_per_target
             obs_len = self.max_targets * self.obs_dim_per_target
             self.observation_space = gym.spaces.Box(
@@ -187,6 +193,26 @@ class MultiTargetEnv(gym.Env):
         else:
             raise ValueError(f"Invalid macro action: {macro}")
 
+    def action_masks(self) -> np.ndarray:
+        """
+        Return a boolean array where True = valid action, False = invalid.
+        Required by MaskablePPO.
+        """
+        if self.mode == "search":
+            # All search grid cells are always valid
+            return np.ones(self.n_actions, dtype=bool)
+        
+        elif self.mode == "track":
+            # Only known targets are valid
+            return self.known_mask.copy()
+        
+        else:  # "combined"
+            # First n_grid_cells actions = search (always valid)
+            # Next max_targets actions = track (valid if known)
+            mask = np.ones(self.n_actions, dtype=bool)
+            mask[self.n_grid_cells:] = self.known_mask
+            return mask
+        
     def step(self, action):
         macro, micro_search, micro_track = self.decode_action(action)
         micro = [0., 0.]
@@ -243,13 +269,19 @@ class MultiTargetEnv(gym.Env):
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R)
                 iG = compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                #print(1-prob)
+                probFull = compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                #print(prob)
+                #print(probFull)
+                #print(probFull - prob)
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
                 #total_iG = iG
                 
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                #print(1-prob)
+                probFull = compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                #print(prob)
+                #print(probFull)
+                #print(probFull - prob)
                 prob_reward += prob
                 lost = 1 - prob
                 if lost>total_iG:
@@ -289,11 +321,14 @@ class MultiTargetEnv(gym.Env):
 
             # Check validity
             if not self.known_mask[target_id]:
-                # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
+                invalid_action = True
+            else:
+                invalid_action = False
+                """ # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
                 info = {"invalid_action": True, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
                 # Termination
                 done = self.step_count >= self.max_steps
-                return obs, -1.0, done, False, info
+                return obs, -1.0, done, False, info """
 
             # Simple reward = total information gain (KL) or punishment for loosing target
             """ if lost_reward<0:
@@ -310,12 +345,41 @@ class MultiTargetEnv(gym.Env):
             if self.n_targets == self.init_n_target:
                 reward += 1 """
             reward = prob_reward
+            """ # Penalty for losing targets this step
+            if lost_targets:
+                obs = self._get_obs()
+                self.step_count += 1
+
+                reward = -1.0   
+                done = True
+                truncated = False
+
+                info = {
+                    "catastrophic_loss": True,
+                    "remaining_targets": self.n_targets,
+                    "action_mask": self.get_action_mask()
+                }
+
+                self.obs = obs
+                return obs, reward, done, truncated, info """
+
             # Termination
             done = self.step_count >= self.max_steps
             truncated = False
 
             # Info dict can include diagnostics
-            info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
+            info = {
+                "macro": macro,
+                "micro": micro,
+                "target_id": target_id,
+                "reward_info_gain": total_iG,
+                "action_mask": self.get_action_mask(),
+                "lost_target": lost_targets,
+                "n_known": np.sum(self.known_mask),  # Track this!
+                "n_lost_this_step": len(lost_targets),
+                "detect_counter": self.detect_counter,
+                "lost_counter": self.lost_counter
+            }
             self.obs = obs
 
             return obs, reward, done, truncated, info
@@ -479,13 +543,16 @@ class MultiTargetEnv(gym.Env):
         for i, tgt in enumerate(all_targets):
             x, y, vx, vy = tgt["x"]
             trace = np.trace(tgt["P"])
-
             p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
-
             known = 1.0 if self.known_mask[tgt["id"]] else 0.0
-
-            obs_list.extend([trace * known])
-
+            
+            # Provide more informative features:
+            obs_list.extend([
+                trace * known#,      # Uncertainty (your current feature)
+                #p_fov * known,      # Risk of losing this target (NEW!)
+                #known               # Is this target tracked? (NEW!)
+            ])
+        
         return np.array(obs_list, dtype=np.float32)
         
     def sample_track_action(self):
@@ -746,5 +813,67 @@ def compute_fov_prob_single(fov, x, P):
         # Gaussian N(0, σ)
         dist = norm(loc=0.0, scale=pos_std)
         prob *= dist.cdf(half_fov) - dist.cdf(-half_fov)
+
+    return prob
+
+def compute_fov_prob_full(P, fov_x, fov_y=None, rtol=1e-8):
+    """
+    Compute probability that a 2D Gaussian state remains inside a rectangular FOV
+    using full covariance integration (no independence assumption).
+
+    Parameters
+    ----------
+    P : 2x2 numpy array
+        Position covariance matrix
+    fov_x : float
+        Full FOV width in x
+    fov_y : float, optional
+        Full FOV width in y (defaults to fov_x)
+    rtol : float
+        Relative tolerance for quadrature
+
+    Returns
+    -------
+    prob : float
+        Probability of remaining inside the FOV
+    """
+
+    if fov_y is None:
+        fov_y = fov_x
+
+    hx = fov_x / 2.0
+    hy = fov_y / 2.0
+
+    # slice P to only take into account positional values
+    P2 = P[0:2, 0:2]
+
+    # Ensure positive definiteness if needed
+    detP = np.linalg.det(P2)
+    if detP <= 0:
+        raise ValueError("Covariance matrix must be positive definite")
+
+    Pinv = np.linalg.inv(P2)
+
+    # Gaussian exponent
+    def integrand(y, x):
+        quad = (
+            Pinv[0, 0] * x**2
+            + (Pinv[0, 1] + Pinv[1, 0]) * x * y
+            + Pinv[1, 1] * y**2
+        )
+        return math.exp(-0.5 * quad)
+
+    atol = 1e-13
+
+    integral = dblquad(
+        integrand,
+        -hx, hx,
+        lambda x: -hy,
+        lambda x:  hy,
+        epsabs=atol,
+        epsrel=rtol
+    )[0]
+
+    prob = (1.0 / (2.0 * math.pi * math.sqrt(detP))) * integral
 
     return prob

@@ -7,6 +7,8 @@ import pandas as pd
 from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.wrappers import ActionMasker 
 
 from multi_target_env import MultiTargetEnv
 from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already have these
@@ -15,8 +17,8 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 60_000
-mode = "search"
+total_timesteps =60_000
+mode = "track"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -36,11 +38,11 @@ class RandomSeedEnv(gym.Env):
         self.n_targets = n_targets
         self.n_unknown_targets = n_unknown_targets
 
-        # Create an initial environment so we can expose spaces
+        # Create an initial environment
         self.env = MultiTargetEnv(
             n_targets=self.n_targets,
             n_unknown_targets=self.n_unknown_targets,
-            seed = int(np.random.choice(self.seed_list)),
+            seed=int(np.random.choice(self.seed_list)),
             mode=self.mode,
         )
 
@@ -49,7 +51,6 @@ class RandomSeedEnv(gym.Env):
         self.observation_space = self.env.observation_space
 
     def reset(self, **kwargs):
-        # Recreate env with a new seed each reset
         seed = int(np.random.choice(self.seed_list))
         self.env = MultiTargetEnv(
             n_targets=self.n_targets,
@@ -61,6 +62,10 @@ class RandomSeedEnv(gym.Env):
 
     def step(self, action):
         return self.env.step(action)
+    
+    def action_masks(self):
+        """Forward the action mask from the underlying environment."""
+        return self.env.action_masks()
 
     def render(self):
         return self.env.render()
@@ -90,6 +95,22 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
             n_epochs=10,
             clip_range=0.5, #0.17974547307789224, #0.32790623385659234, #0.3890633888493019, #0.38403499436025856,  
             batch_size=256, #128, #32, #64,
+            verbose=1,
+        )
+
+    elif algo_name == "MaskablePPO":  # Add this
+        model = MaskablePPO(
+            "MlpPolicy",
+            env,
+            gamma=0.97,              # Higher for long-term planning
+            n_steps=2048,            # Increase from 128
+            ent_coef=0.01,           # More exploration
+            learning_rate=3e-4,
+            vf_coef=0.5,
+            gae_lambda=0.95,         # Higher for credit assignment
+            n_epochs=10,
+            clip_range=0.2,          # Standard PPO value
+            batch_size=64,           # Smaller batches
             verbose=1,
         )
 
@@ -188,6 +209,18 @@ def main():
     np.random.seed(0)
     shared_plotter = SharedLivePlot("Agent comparison during training")
 
+    # MaskablePPO (wrapped with ActionMasker)
+    color_mppo = cm.get_cmap("tab10")(0)
+    
+    # Create the wrapper function for ActionMasker
+    def make_masked_env():
+        base_env = RandomSeedEnv(seeds, mode=mode)
+        # Wrap with ActionMasker
+        return ActionMasker(base_env, lambda env: env.action_masks())
+    
+    env_mppo = DummyVecEnv([make_masked_env])
+    train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
+
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
@@ -196,7 +229,7 @@ def main():
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)
@@ -208,11 +241,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-    # Instantiate MCTS for this environment
-    #env = env_fn()
-    #mcts = MCTS(env, n_simulations=1000, rollout_depth=5, mode="search")  # adjust parameters
-
-    #print("Start MCTS policy")
-    #run_mcts_policy_and_save(env_fn, mcts, seed, total_timesteps=total_timesteps, mode=mode, save_dir="results", visualize=False)
