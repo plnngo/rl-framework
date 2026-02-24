@@ -4,7 +4,7 @@ import gymnasium as gym
 import numpy as np
 
 import KalmanFilter
-from multi_target_env import MultiTargetEnv
+from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 # Set JAVA_HOME BEFORE starting JVM
 os.environ["JAVA_HOME"] = str(jdk4py.JAVA_HOME)
@@ -21,7 +21,7 @@ orekit.pyhelpers.setup_orekit_data(from_pip_library=True)
 from org.orekit.time import AbsoluteDate, TimeScalesFactory
 from org.orekit.frames import FramesFactory
 from org.orekit.propagation.analytical.tle import TLE,TLEPropagator
-from org.orekit.utils import Constants
+from org.orekit.utils import Constants, PVCoordinates
 from org.orekit.orbits import CartesianOrbit, OrbitType, PositionAngleType
 from org.orekit.propagation.analytical import KeplerianPropagator
 from org.orekit.propagation import StateCovarianceMatrixProvider, StateCovariance
@@ -30,18 +30,22 @@ from org.hipparchus.geometry.euclidean.threed import Vector3D
 
 class TrackSatEnv(gym.Env):
     def __init__(self, d_state=6, max_steps=100):
-        self.max_targets = 3
+        #self.max_targets = 3
+        self.max_targets = 1
+
         self.max_steps = max_steps
-        self.fov = np.deg2rad(2)        # diameter of FOV
+        self.fov = np.deg2rad(0.25)        # width of FOV
         self.threshold_fov = 0.5 
         self.frame = FramesFactory.getEME2000()
         self.initialDate = AbsoluteDate(2025, 3, 23, 0, 0, 0, TimeScalesFactory.getUTC())
 
         # initial covariance diagonal
+        #diag_initial_values = [1e9, 1e9, 1e9, 1.e8, 1.e8, 1.e8]
         diag_initial_values = [1e6, 1e6, 1e6, 1., 1., 1.]
 
+
         self.tles = {
-            "TDRS05": {
+            """ "TDRS05": {
                 "tle": TLE(
                     "1 21639U 91054B   25081.51181291 -.00000056  00000-0  00000+0 0  9995",
                     "2 21639  14.1260 357.0831 0003813   3.2787 258.6419  0.99948788123177"
@@ -52,7 +56,7 @@ class TrackSatEnv(gym.Env):
                     "1 22314U 93003B   25081.20863616 -.00000286  00000-0  00000+0 0  9991",
                     "2 22314  14.1718   0.3832 0006404 172.6992  36.1023  1.00270003117841"
                 )
-            },
+            }, """
             "TDRS12": {
                 "tle": TLE(
                     "1 39504U 14004A   25080.81834953 -.00000263  00000-0  00000-0 0  9998",
@@ -76,6 +80,14 @@ class TrackSatEnv(gym.Env):
 
             # Transform state to J2000
             pv_j2000 = spacecraftState.getPVCoordinates(self.frame)
+            state = np.array([
+                pv_j2000.getPosition().getX(),
+                pv_j2000.getPosition().getY(),
+                pv_j2000.getPosition().getZ(),
+                pv_j2000.getVelocity().getX(),
+                pv_j2000.getVelocity().getY(),
+                pv_j2000.getVelocity().getZ()
+            ])
 
             # Create fresh covariance matrix 
             diag_values = JArray(JDouble)(diag_initial_values)
@@ -84,7 +96,7 @@ class TrackSatEnv(gym.Env):
             self.satellites[name] = {
                 "tle": tle,
                 "propagator": propagator,
-                "state": pv_j2000,
+                "state": state,
                 "cov": np.array(covariance.getData()),
                 "is_known": True
             }
@@ -127,6 +139,7 @@ class TrackSatEnv(gym.Env):
         obs_list = []
         for sat in self.satellites.values():
             trace = np.trace(sat["cov"])
+            det = np.linalg.det(sat["cov"])
             known = 1.0 if sat["is_known"] else 0.0
 
             obs_list.append(trace * known)
@@ -150,54 +163,59 @@ class TrackSatEnv(gym.Env):
             dt = 1.
             sat["state"], sat["cov"] = TrackSatEnv.propagate_sat_keplerian_force(sat["state"], sat["cov"], currentDate, dt, self.frame)
 
-            # transform cov into measurement space
-            
-
             # update state of target that is addressed in action
             if action == index:
                 
                 # check validity
-                if not(sat["is_known"]):
+                """ if not(sat["is_known"]):
                     info = {"invalid_action": True, "lost_target": lost_targets}
                     # Termination
                     done = self.step_count >= self.max_steps
                     obs = self._get_obs()
-                    return obs, -1.0, done, False, info
+                    return obs, -1.0, done, False, info """
                 
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(sat["state"], sat["cov"], R, observationFcn)
                 Hk, Gk = observationFcn(xUpdate)
                 S = Hk @ PUpdate @ Hk.T
-                prob = MultiTargetEnv.compute_fov_prob_full(S, self.fov, self.fov)
+                det = np.linalg.det(S)
+                #prob = MultiTargetEnv.compute_fov_prob_full(S, self.fov, self.fov)
+                prob = compute_fov_prob_single(self.fov, None, S)
+                #print(np.trace(S))
                 reward += prob
 
                 # compute information gain
                 iG = MultiTargetEnv.compute_kl_divergence(sat["state"], sat["cov"], xUpdate, PUpdate)
+                sat["state"], sat["cov"] = xUpdate, PUpdate
             else:
                 # compare FOV-probability of neglected targets with FOV
                 Hk, Gk = observationFcn(sat["state"])
                 S = Hk @ sat["cov"] @ Hk.T
-                prob = MultiTargetEnv.compute_fov_prob_full(S, self.fov, self.fov)
+                det = np.linalg.det(S)
+                #prob = MultiTargetEnv.compute_fov_prob_full(S, self.fov, self.fov)
+                prob = compute_fov_prob_single(self.fov, None, S)
+                #print(prob)
                 reward += prob
-                if prob<self.threshold_fov:
-                    lost_targets.append(name)
-                    sat["is_known"] = False     # satellite considered as lost
+                
+            if prob<self.threshold_fov:
+                lost_targets.append(name)
+                sat["is_known"] = False     # satellite considered as lost
 
-            obs = self._get_obs()
-            self.step_count += 1
+        obs = self._get_obs()
+        self.step_count += 1
 
-            # Termination
-            done = self.step_count >= self.max_steps
-            truncated = False
+        # Termination
+        done = self.step_count >= self.max_steps
+        truncated = False
 
-            # Info dict can include diagnostics
-            info = {
-                "sat_name": name,
-                "iG": iG,
-                "lost_target": lost_targets
-            }
-            self.obs = obs
+        # Info dict can include diagnostics
+        info = {
+            "iG": iG,
+            "prob": prob,
+            "lost_target": lost_targets
+        }
+        self.obs = obs
 
-            return obs, reward, done, truncated, info
+        return obs, reward, done, truncated, info
 
     
     @staticmethod
@@ -207,8 +225,20 @@ class TrackSatEnv(gym.Env):
 
         P_matrix = Array2DRowRealMatrix(P.tolist())
 
+        # positional vector
+        pos = Vector3D(float(x[0]),
+                   float(x[1]),
+                   float(x[2]))
+
+        # Velocity vector
+        vel = Vector3D(float(x[3]),
+                    float(x[4]),
+                    float(x[5]))
+
+        pv = PVCoordinates(pos, vel)
+
         # Create initial orbit at initialDate
-        orbit = CartesianOrbit(x, frame, initialDate, mu)
+        orbit = CartesianOrbit(pv, frame, initialDate, mu)
         covInit = StateCovariance(P_matrix, initialDate, frame, OrbitType.CARTESIAN, PositionAngleType.MEAN)
 
         # Keplerian propagator
