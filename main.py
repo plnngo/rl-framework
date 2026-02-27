@@ -5,7 +5,7 @@ from sb3_contrib import MaskablePPO
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 import KalmanFilter
-from LSBatchFilter import estimate_all_targets_from_tracks, generate_truth_states, plot_errors_and_sigmas, process_estimates
+from LSBatchFilter import Fx_cv_cont, batch_estimate_single_target, estimate_all_targets_from_tracks, f_cv_cont, generate_truth_states, plot_errors_and_sigmas, process_estimates, f_ct_linear, Fx_ct_linear
 from deterministic_tracker import select_best_action
 from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from tqdm import trange
 from matplotlib.patches import Ellipse, Rectangle
+from scipy.integrate import solve_ivp
+from collections import defaultdict
 
 def plot_cov_ellipse(cov, mean, ax, n_std=1.0, **kwargs):
     """Plot an ellipse representing the covariance matrix cov centered at mean."""
@@ -550,6 +552,7 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                 #action = 6
             elif deterministic_policy:
                 action, best_ig, best_update = select_best_action(env, env.dt)
+                #action = 4
             elif maskable:
                 action_masks = env.action_masks()
                 action, _ = model.predict(obs, action_masks=action_masks)
@@ -568,8 +571,8 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                 episode_log[t] = {}
 
             if ep == n_episodes - 1:
-                for tgt in range(env.n_targets):
-                    exceed, x, P = analyse_tracking_task(tgt, env, confidence=0.95)
+                for tgt in env.targets:
+                    exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
                     """ if exceed and tgt not in exceed_target:
                         exceed_target.append(tgt) """
 
@@ -578,11 +581,11 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                         """ if info.get("invalid_action"):
                             illegalActs += 1 """
                         continue
-                    if tgt in info["target_id"]:
+                    if tgt["id"] in info["target_id"]:
                         if x is None:
                             print("error")
-                        episode_log[t][tgt] = {
-                            "id": tgt,
+                        episode_log[t][tgt["id"]] = {
+                            "id": tgt["id"],
                             "state": x.copy(),
                             "cov": P.copy(),
                         }
@@ -1178,7 +1181,8 @@ def compute_state_differences_with_ekf(traj_pred, last_episode_log, last_env, R)
             x_upd, P_upd = MultiTargetEnv.ekf_update(
                 x_pred.copy(),
                 P_pred.copy(),
-                R
+                R, 
+                MultiTargetEnv.extract_measurement
             )
 
             # Difference: updated EKF - predicted
@@ -1225,15 +1229,18 @@ def extract_tracks_from_log(last_episode_log, n_targets=5):
 
     return tracks
 
-def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
+def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
     errors_all_targets = []
     total_trace_cov = []
-    for tgt_id, track in tracks.items():
+    #for tgt_id, track in tracks.items():
+    for tgt_id in range(len(all_target_states)):
         #print("Plot errors for target " + str(tgt_id))
 
         # --- Extract data from track ---
-        timesteps = [obs["t"] for obs in track]
-        if not timesteps and tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
+        #timesteps = [obs["t"] for obs in track]
+        timesteps = np.arange(len(all_meas[tgt_id]))
+        #if not timesteps and tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
+        if tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
             continue
         all_tgt_meas = all_meas[tgt_id]
         tgt_meas = all_tgt_meas[timesteps, :]
@@ -1243,20 +1250,30 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
                     if tid == tgt_id:
                         motion = last_env.motion_model[tgt_id]
                         if motion == "L":
+                            f_dyn = lambda x, omega=None: f_cv_cont(x)
+                            Fx_dyn = lambda x, omega=None: Fx_cv_cont(x)
                             inputs = {
                                 "Rk": R,
-                                "Q": Q,
-                                "Po": tgt['P']
+                                #"Q": np.eye(2) * 1e-27,
+                                "Q": np.eye(2) * 0.,
+                                "Po": tgt['P'],
+                                "f_dyn": f_dyn,
+                                "Fx_dyn": Fx_dyn
                             }
                             integrationFcn = KalmanFilter.int_constant_velocity_stm
                             
                         else:
                             omega = last_env.motion_params[tgt_id]
+                            f_dyn = lambda x, omega: f_ct_linear(x, omega)
+                            Fx_dyn = lambda x, omega: Fx_ct_linear(x, omega)
                             inputs = {
                                 "Rk": R,
-                                "Q": Q,
+                                #"Q": np.eye(2) * 5e-13,
+                                "Q": np.eye(2) * 0,
                                 "Po": tgt['P'],
-                                "omega": omega
+                                "omega": omega,
+                                "f_dyn": f_dyn,
+                                "Fx_dyn": Fx_dyn
                             }
                             integrationFcn = KalmanFilter.int_constant_turn_stm_2D
                         break
@@ -1266,25 +1283,35 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
                 if tid == tgt_id:
                     motion = last_env.motion_model[tgt_id]
                     if motion == "L":
+                        f_dyn = lambda x, omega=None: f_cv_cont(x)
+                        Fx_dyn = lambda x, omega=None: Fx_cv_cont(x)
                         inputs = {
                             "Rk": R,
-                            "Q": Q,
-                            "Po": tgt['P']
+                            #"Q": np.eye(2) * 1e-27,
+                            "Q": np.eye(2) * 0,
+                            "Po": tgt['P'],
+                            "f_dyn": f_dyn,
+                            "Fx_dyn": Fx_dyn
                         }
                         integrationFcn = KalmanFilter.int_constant_velocity_stm
                         
                     else:
                         omega = last_env.motion_params[tgt_id]
+                        f_dyn = lambda x, omega: f_ct_linear(x, omega)
+                        Fx_dyn = lambda x, omega: Fx_ct_linear(x, omega)
                         inputs = {
                             "Rk": R,
-                            "Q": Q,
+                            #"Q": np.eye(2) * 5e-13,
+                            "Q": np.eye(2) * 0,
                             "Po": tgt['P'],
-                            "omega": omega
+                            "omega": omega,
+                            "f_dyn": f_dyn,
+                            "Fx_dyn": Fx_dyn
                         }
                         integrationFcn = KalmanFilter.int_constant_turn_stm_2D
                     break
 
-        t_all, Xk_mat, P_mat, resids = KalmanFilter.ckf_predict_update(
+        """ t_all, Xk_mat, P_mat, resids = KalmanFilter.ckf_predict_update(
                                         Xo_ref = tgt['x'],          # shape (4,)
                                         t_obs  = timesteps,         # shape (L,)
                                         tend   = last_env.max_steps,
@@ -1301,12 +1328,12 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
         pos_error = np.sqrt((tgt_states[0, :] - Xk_mat[0, :])**2 + (tgt_states[1, :] - Xk_mat[1, :])**2)
         three_sigma_pos = 3.0 * np.sqrt(P_mat[0,0,:] + P_mat[1,1,:])
         trace_P = np.trace(P_mat, axis1=0, axis2=1)
-        trace_P_pos = np.trace(P_mat[0:2, 0:2, :], axis1=0, axis2=1)
-        if timesteps:
+        trace_P_pos = np.trace(P_mat[0:2, 0:2, :], axis1=0, axis2=1) """
+        """ if timesteps:
             selected_traces = trace_P_pos[timesteps[0]:]
         else:
-            selected_traces = trace_P_pos
-        total_trace_cov.append(selected_traces)
+            selected_traces = trace_P_pos """
+        #total_trace_cov.append(selected_traces)
 
         """ plt.figure()
         plt.plot(t_all, three_sigma_pos, label="+3σ x")
@@ -1323,7 +1350,7 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
             continue
         else: """
             
-        Xk, Pk, resids = KalmanFilter.ckf(
+        Xk, Pk, resids = KalmanFilter.ekf(
                         Xo_ref = tgt['x'],          # shape (4,)
                         t_obs  = timesteps,         # shape (L,)
                         obs    = tgt_meas,          # shape (p, L)
@@ -1335,15 +1362,18 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q):
         tgt_states_with_velocity = all_tgt_states[timesteps, :]
         tgt_states = tgt_states_with_velocity.T[:4, :]
         error = tgt_states - Xk
-        errors_all_targets.append(error)
-        pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
+        #errors_all_targets.append(error)
+        """ pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
         three_sigma_x  = 3.0 * np.sqrt(Pk[0, 0, :])
         three_sigma_y  = 3.0 * np.sqrt(Pk[1, 1, :])
         three_sigma_vx = 3.0 * np.sqrt(Pk[2, 2, :])
         three_sigma_vy = 3.0 * np.sqrt(Pk[3, 3, :])
-        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:])
+        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:]) """
 
         t = timesteps
+
+        errors_all_targets.append(Xk)
+        total_trace_cov.append(Pk)
 
         """ plt.figure()
         plt.plot(t, three_sigma_x, label="+3σ x")
@@ -1451,6 +1481,383 @@ def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episo
         print(np.std([np.mean(arr) for arr in total_error_episodes], ddof=1))
     return error_episodes, total_error_episodes
 
+def efficiencyOtherPlot():
+    n_targets = 5
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
+
+    sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
+    sigma_r = 0.1        # 10 cm range noise
+
+    R = np.diag([sigma_theta**2, sigma_r**2])
+     # Generate truth data
+    timesteps = np.arange(env.max_steps)
+    all_target_states = {}
+    all_meas = {}
+    for tgt_id in env.targets:
+        tid = tgt_id["id"]
+        truth_states, measurements, _ = generate_truth_states(timesteps, tid, env)
+        all_target_states[tid] = truth_states
+        measurements[:, 0] += np.random.normal(0, sigma_theta, size=len(measurements))
+        measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
+        all_meas[tid] = measurements
+    
+    # Extract best cov guess
+    estimates = {}
+    efficiency = defaultdict(list)
+    for k in timesteps:
+        for tgt in env.targets:
+            if env.motion_model[tgt["id"]] == "T":
+                chosen_model = "CT"
+
+            else: 
+                chosen_model = "CV"
+            state = tgt["x"]
+            cov = tgt["P"]
+
+            # Batch LS estimate run in a batch for ever new incoming measurement
+            out = batch_estimate_single_target(
+                    np.array(timesteps[:k+1]),
+                    np.array(all_meas[tgt["id"]][:k+1]),
+                    state,
+                    cov,
+                    R,
+                    model=chosen_model,
+                    omega = env.motion_params[tgt["id"]]
+            )
+            estimates[tgt["id"]] = out
+
+        all_meas_trimmed = {
+            tgt_id: meas[:k+1]
+            for tgt_id, meas in all_meas.items()
+        }
+        klX, klCov = estimateAndPlot(env.targets, all_target_states, env, all_meas_trimmed, R) 
+
+        for i in range(len(estimates)):
+            P_est = estimates[i]["P_mat"][:,:,k]
+            det_Pest = np.linalg.det(P_est)
+
+            P_kl = klCov[i][:,:,k]
+            det_Pkl = np.linalg.det(P_kl)
+            efficiency[i].append(det_Pest / det_Pkl)
+    plt.figure()
+
+    for tgt_id, values in efficiency.items():
+        plt.plot(values, label=f"Target {tgt_id}")
+
+    plt.xlabel("Timestep")
+    plt.ylabel("Efficiency (det_Pest / det_Pkl)")
+    plt.title("Efficiency per Target")
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+
+
+
+def efficiencyPlot():
+    n_targets = 5
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
+    obs = env.reset()
+    n_episodes = 1
+    sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
+    sigma_r = 0.1        # 10 cm range noise
+
+    R = np.diag([sigma_theta**2, sigma_r**2])
+    Q = np.eye(2) * 1e-14
+    #Q = np.eye(2) * 0
+
+    # Generate truth data
+    timesteps = np.arange(env.max_steps)
+    all_target_states = {}
+    all_meas = {}
+    for tgt_id in env.targets:
+        tid = tgt_id["id"]
+        truth_states, measurements, _ = generate_truth_states(timesteps, tid, env)
+        all_target_states[tid] = truth_states
+        measurements[:, 0] += np.random.normal(0, sigma_theta, size=len(measurements))
+        measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
+        all_meas[tid] = measurements
+    
+    # Extract best cov guess
+    bestCov = []
+    estimates = {}
+    for tgt in env.targets:
+        if env.motion_model[tgt["id"]] == "T":
+            chosen_model = "CT"
+            """ state = np.append(tgt["x"], env.motion_params[tgt["id"]])
+            cov = np.zeros((5, 5))
+            cov[:4, :4] = tgt["P"]
+            cov[4, 4] = 0.1 """
+
+        else: 
+            chosen_model = "CV"
+        state = tgt["x"]
+        cov = tgt["P"]
+
+        out = batch_estimate_single_target(
+                timesteps,
+                all_meas[tgt["id"]],
+                state,
+                cov,
+                R,
+                model=chosen_model,
+                omega=env.motion_params[tgt["id"]]
+        )
+        bestCov.append((tgt["id"], out["P0_post"]))
+        estimates[tgt["id"]] = out
+
+    truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
+        process_estimates(timesteps, estimates, env)
+    
+    for i in range(env.n_targets):
+        
+        """ plot_errors_and_sigmas(
+            errors_by_tgt[i],
+            sigma_by_tgt[i],
+            t=t_by_tgt[i],          
+            target_id=i
+        ) """
+    algorithms = ["Heuristic", "MaskPPO", "PPO", "DQN", "Random"]
+    meanEfficiencies = {alg: [] for alg in algorithms}
+    for i in range(n_episodes):
+        # Heuristic track
+        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True)
+        tracks = extract_tracks_from_log(last_episode_log)
+        ls_cov_dict = dict(bestCov)
+
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R) 
+        efficiency_by_targetKLHeuristic, t_by_target = computeEff(klCov, tracks, estimates)
+        eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
+
+        """ if meanEfficiencies["Heuristic"] is None:
+            meanEfficiencies["Heuristic"] = eff_sum.copy()
+        else:
+            meanEfficiencies["Heuristic"] += (eff_sum - meanEfficiencies["Heuristic"]) / (i + 1) """
+    
+        #plot_efficiency(efficiency_by_target, t_by_target)
+        plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
+        plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target)
+
+        env = last_env
+        """ # ****** Maskable PPO policy ******
+        maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
+        maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=1, deterministic_policy=False, maskable=True)
+        tracks = extract_tracks_from_log(last_episode_log)
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q) 
+        efficiency_by_targetKLMaskPPO, t_by_target = computeEff(klCov, tracks, ls_cov_dict)
+        #plot_efficiency_all(efficiency_by_targetKL, t_by_target)
+        eff_sum = np.sum(list(efficiency_by_targetKLMaskPPO.values()), axis=0)
+        if meanEfficiencies["MaskPPO"] is None:
+            meanEfficiencies["MaskPPO"] = eff_sum.copy()
+        else:
+            meanEfficiencies["MaskPPO"] += (eff_sum - meanEfficiencies["MaskPPO"]) / (i + 1)
+
+        env = last_env
+        # ****** PPO policy ******
+        ppo_model = PPO.load("agents/ppo_track_trained_IEEE", env=env)
+        ppo_rewards, exceedFOV_ppo, last_env, last_episode_log, illegal_actions_ppo = evaluate_agent_track(env, model=ppo_model, n_episodes=1, deterministic_policy=False)
+        tracks = extract_tracks_from_log(last_episode_log)
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q) 
+        efficiency_by_targetKLPPO, t_by_target = computeEff(klCov, tracks, ls_cov_dict)
+        #plot_efficiency_all(efficiency_by_targetKL, t_by_target)
+        eff_sum = np.sum(list(efficiency_by_targetKLPPO.values()), axis=0)
+        if meanEfficiencies["PPO"] is None:
+            meanEfficiencies["PPO"] = eff_sum.copy()
+        else:
+            meanEfficiencies["PPO"] += (eff_sum - meanEfficiencies["PPO"]) / (i + 1)
+
+        env = last_env
+        # ****** DQN policy ******
+        dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
+        dqn_rewards, exceedFOV_dqn, last_env, last_episode_log, illegal_actions_dqn = evaluate_agent_track(env, model=dqn_model, n_episodes=1)
+        tracks = extract_tracks_from_log(last_episode_log)
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q) 
+        efficiency_by_targetKLDQN, t_by_target = computeEff(klCov, tracks, ls_cov_dict)
+        #plot_efficiency_all(efficiency_by_targetKL, t_by_target) 
+        eff_sum = np.sum(list(efficiency_by_targetKLDQN.values()), axis=0)
+        if meanEfficiencies["DQN"] is None:
+            meanEfficiencies["DQN"] = eff_sum.copy()
+        else:
+            meanEfficiencies["DQN"] += (eff_sum - meanEfficiencies["DQN"]) / (i + 1)
+
+        env = last_env
+        # ****** Random policy ******
+        random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=1, random_policy=True, deterministic_policy=False)
+        tracks = extract_tracks_from_log(last_episode_log)
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, Q) 
+        efficiency_by_targetKLRandom, t_by_target = computeEff(klCov, tracks, ls_cov_dict)
+        #plot_efficiency_all(efficiency_by_targetKL, t_by_target)
+        eff_sum = np.sum(list(efficiency_by_targetKLRandom.values()), axis=0)
+        if meanEfficiencies["Random"] is None:
+            meanEfficiencies["Random"] = eff_sum.copy()
+        else:
+            meanEfficiencies["Random"] += (eff_sum - meanEfficiencies["Random"]) / (i + 1)
+            
+    plot_mean_efficiencies(meanEfficiencies) """
+
+def plot_mean_efficiencies(meanEfficiencies):
+    """
+    Plots mean efficiency curves for all algorithms stored in meanEfficiencies.
+
+    Parameters
+    ----------
+    meanEfficiencies : dict
+        Dictionary of form:
+        {
+            "AlgorithmName": np.array(shape=(T,)),
+            ...
+        }
+    """
+
+    plt.figure()
+
+    for alg_name, values in meanEfficiencies.items():
+        if values is None:
+            continue
+
+        values = np.asarray(values)
+        x = np.arange(len(values))
+        plt.plot(x, values, label=alg_name)
+
+    plt.xlabel("Time Step")
+    plt.ylabel("Mean Efficiency")
+    plt.title("Mean Efficiency over Time")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def computeEff(klCov, tracks, ls_cov_dict):
+    efficiency_by_target = {}
+    efficiency_by_targetKL = {}
+    t_by_target = {}
+
+    # ODE tolerances
+    ode_tol = 1e-12
+    for tgt_id, track in tracks.items():
+        #tvec = [obs["t"] for obs in track]
+        tvec = np.arange(100)
+        #covEst = [obs["cov"] for obs in track]
+        covEstKL = klCov[tgt_id]
+
+        targets = ls_cov_dict[tgt_id]
+        P0 = targets["P0_post"][:4, :4]
+        if targets["model"] == "CT":
+            integrationFcn = KalmanFilter.int_constant_turn_stm_2D
+            inputs = {
+                        "Rk": None,
+                        "Q": np.eye(2) * 5e-13,
+                        "Po": P0,
+                        "omega": targets["omega"]
+                    }
+        else:
+            integrationFcn = KalmanFilter.int_constant_velocity_stm
+            inputs = {
+                        "Rk": None,
+                        "Q": np.eye(2) * 5e-27,
+                        "Po": P0
+                    }
+        P = targets["P_mat"]
+        efficiency = []
+        efficiencyKL = []
+        propPLS = []
+        
+        n = 4
+        phi0_v = np.eye(n).reshape(n * n)
+        int0 = np.hstack((targets["Xref"][:4,0], phi0_v))
+        for k in range(len(tvec)):
+            if k == 0:
+                P_prop = P0
+                Xref = targets["Xref"][:,0].copy()
+            else:
+                sol = solve_ivp(
+                    fun=lambda tau, y: integrationFcn(tau, y, inputs),
+                    t_span=(tvec[0], tvec[k]),  # always from t0
+                    y0=int0,                    # always from initial state + identity STM
+                    rtol=ode_tol,
+                    atol=ode_tol
+                )
+                xout = sol.y[:, -1]
+                Xref = xout[:n]
+                phi = xout[n:].reshape((n, n))
+
+                P_prop = phi @ P0 @ phi.T
+
+            #P_est = np.array(covEst[k])
+            P_est_KL = np.array(covEstKL[:,:,k])
+            #P_ls = np.array(P[:4,:4,k])
+            P_ls = P_prop
+
+            det_ls  = np.linalg.det(P_ls)
+            #det_est = np.linalg.det(P_est)
+            det_estKL = np.linalg.det(P_est_KL)
+
+            # Avoid division by zero
+            if det_ls <= 0:
+                efficiency.append(np.nan)
+                efficiencyKL.append(np.nan)
+            else:
+                #efficiency.append(det_ls / det_est)
+                efficiencyKL.append(det_ls / det_estKL)
+                propPLS.append(det_ls)
+
+        #efficiency_by_target[tgt_id] = np.array(efficiency)
+        efficiency_by_targetKL[tgt_id] = np.array(efficiencyKL)
+        t_by_target[tgt_id] = np.array(tvec)
+        """ propPLS = np.array(propPLS)
+        P_xx = propPLS[:, 0, 0]
+        P_yy = propPLS[:, 1, 1]
+        three_sigma_pos = 3.0 * np.sqrt(P_xx + P_yy)
+        detP = np.det """
+
+        plt.plot(propPLS)
+        plt.xlabel("Timestep")
+        plt.ylabel("Determinant")
+        plt.title("Covariance")
+        plt.grid(True)
+        plt.show()
+    return efficiency_by_targetKL, t_by_target
+
+def plot_efficiency(efficiency_by_target, t_by_target):
+
+    for tgt_id in efficiency_by_target.keys():
+
+        plt.figure()
+
+        plt.plot(
+            t_by_target[tgt_id],
+            efficiency_by_target[tgt_id]
+        )
+
+        plt.xlabel("Time")
+        plt.ylabel("Efficiency (det P_LS / det P_est)")
+        plt.title(f"Efficiency over Time - Target {tgt_id}")
+        plt.grid(True)
+
+        plt.show()
+
+def plot_efficiency_all(efficiency_by_target, t_by_target):
+
+    plt.figure()
+
+    for tgt_id in efficiency_by_target.keys():
+
+        plt.scatter(
+            t_by_target[tgt_id],
+            efficiency_by_target[tgt_id],
+            label=f"Target {tgt_id}"
+        )
+
+    plt.xlabel("Time")
+    plt.ylabel("Efficiency (det P_LS / det P_est)")
+    plt.title("Efficiency over Time - All Targets")
+    #plt.axhline(1)        # reference line
+    plt.yscale("log") 
+    plt.legend()
+    plt.grid(True)
+
+    plt.show()
+
 def rmsePlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
@@ -1555,11 +1962,9 @@ def kalmanPlots():
 def main():
     # ****** Test with random policy ******
     n_targets = 5
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 100
+    #env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
+    #n_episodes = 100
 
-    # Reset environment ONCE and plot initial positions right after
-    obs = env.reset()
     #visualize_initial_positions(env)
 
     # Run random policy
@@ -1579,7 +1984,7 @@ def main():
     visualize_trained_agent(env, model, n_steps=30) """
     
 #def anotherMethod():
-    """ seeds = [42, 123, 321]
+    seeds = [42, 123, 321]
 
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
     n_episodes = 100
@@ -1630,9 +2035,9 @@ def main():
         "PPO": ppo_detections,
         "DQN": dqn_detections
     }
-    plot_violin(detection_results, ylabel="Number of Detections") """
+    plot_violin(detection_results, ylabel="Number of Detections")
 
-    # ****** Track ******
+    """ # ****** Track ******
     obs = env.reset()
     maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
     maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=n_episodes, deterministic_policy=False, maskable=True)
@@ -1671,12 +2076,12 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_random], ddof=1))
     print("Reward")
     print(sum(random_rewards)/len(random_rewards))
-    print(np.std([np.mean(arr) for arr in random_rewards], ddof=1))
+    print(np.std([np.mean(arr) for arr in random_rewards], ddof=1)) """
     """ tracks = extract_tracks_from_log(last_episode_log)
     estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
     truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
-        process_estimates(tracks, estimates, last_env)
+        process_estimates(estimates, last_env)
     
     for i in range(last_env.n_targets):
         plot_errors_and_sigmas(
@@ -1686,7 +2091,7 @@ def main():
             target_id=i
         ) """
  
-    # ****** PPO agent ******
+    """ # ****** PPO agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
@@ -1701,7 +2106,7 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_ppo], ddof=1))
     print("Reward")
     print(sum(ppo_rewards)/len(ppo_rewards))
-    print(np.std([np.mean(arr) for arr in ppo_rewards], ddof=1))
+    print(np.std([np.mean(arr) for arr in ppo_rewards], ddof=1)) """
     """ visualize_initial_positions(last_env)
     print(last_env.motion_model) """
     """ tracks = extract_tracks_from_log(last_episode_log)
@@ -1719,7 +2124,7 @@ def main():
         ) """
  
 
-    # ****** DQN agent ******
+    """ # ****** DQN agent ******
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     obs = env.reset()
     dqn_model = DQN.load("agents/dqn_track_trained_IEEE", env=env)
@@ -1737,7 +2142,7 @@ def main():
     print(np.std([np.mean(arr) for arr in dqn_rewards], ddof=1))
     visualize_initial_positions(last_env)
     print(last_env.motion_model) 
-    tracks = extract_tracks_from_log(last_episode_log)
+    tracks = extract_tracks_from_log(last_episode_log) """
     """ estimates = estimate_all_targets_from_tracks(tracks, last_env)
 
     truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
@@ -1765,6 +2170,8 @@ def main():
  """
  
 if __name__ == "__main__":
-    #main()
+    main()
     #kalmanPlots()
-    rmsePlot()
+    #rmsePlot()
+    #efficiencyPlot()
+    #efficiencyOtherPlot()
