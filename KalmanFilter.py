@@ -2,7 +2,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 @staticmethod
-def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
+def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
     """
     Least Squares Conventional Kalman Filter (CKF)
 
@@ -42,14 +42,12 @@ def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
     Po_bar = inputs["Po"]
 
     # Initialization
-    xo_bar = np.zeros(n)
-    xhat = xo_bar.copy()
+    xhat = np.zeros(n)
     P = Po_bar.copy()
     Xref = Xo_ref.copy()
 
     resids = np.zeros((p, L))
     Xk_mat = np.zeros((n, L))
-    Xref_mat = np.zeros((n, L))
     P_mat = np.zeros((n, n, L))
     #Pbk_mat = np.zeros((n, n, L))
 
@@ -59,6 +57,10 @@ def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
     # ODE tolerances
     ode_tol = 1e-12
+
+    prev_norm = 0
+    converged = 0.05
+    count = 0
 
     # Kalman filter loop
     for k in range(L):
@@ -92,8 +94,7 @@ def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
             xout = sol.y[:, -1]
 
         Xref = xout[:n]
-        phi_v = xout[n:]
-        phi = phi_v.reshape((n, n))
+        phi = xout[n:].reshape((n, n))
 
         # -------------------------
         # Step C: Time update
@@ -105,19 +106,16 @@ def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
         xbar = phi @ xhat_prior
         Pbar = phi @ P_prior @ phi.T + Gamma @ Q @ Gamma.T
+        print(Q)
 
         # -------------------------
         # Step D: Measurement update
         # -------------------------
-        theta, r, Hk_til= H_fcn(Xref)
-        Gk = np.array([theta, r])
+        Hk_til, Gk = H_fcn(Xref)
         yk = Yk - Gk
 
         S = Hk_til @ Pbar @ Hk_til.T + Rk
         Kk = Pbar @ Hk_til.T @ np.linalg.inv(S)
-
-        #Bk = yk - Hk_til @ xbar
-        P_bk = S
 
         # -------------------------
         # Step E: State & covariance update
@@ -132,10 +130,19 @@ def ckf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
         resids[:,k] = yk - Hk_til @ xhat
 
         # Save outputs
-        Xref_mat[:, k] = Xref
         Xk_mat[:, k] = Xk
         P_mat[:, :, k] = P
-        #Pbk_mat[:, :, k] = P_bk
+
+        # EKF
+        """ if k != 0:
+            if np.linalg.norm(xhat) < converged and prev_norm < np.linalg.norm(xhat) and count>5:
+                #print(np.linalg.norm(xhat))
+                Xref = Xk.copy()
+                xhat = np.zeros(n)
+                count = 0 """
+
+        prev_norm = np.linalg.norm(xhat)
+        count += 1
 
     return Xk_mat, P_mat, resids
 
@@ -303,3 +310,135 @@ def int_constant_turn_stm_2D(t, X, inputs):
     dX[4:] = dPhi_dt.flatten()
 
     return dX
+
+def int_two_body_stm(t, X, inputs):
+    """
+    Continuous-time two-body dynamics with STM integration.
+
+    State ordering:
+        X = [x, y, z, vx, vy, vz, Phi(0,0), ..., Phi(5,5)]
+
+    inputs must contain:
+        inputs["mu"] = gravitational parameter
+    """
+
+    mu = inputs["mu"]
+    n = 6
+
+    # ------------------------------------------------------------------
+    # Break out state and STM
+    # ------------------------------------------------------------------
+    x = X[:n]
+    phi = X[n:].reshape((n, n))
+
+    rx, ry, rz, vx, vy, vz = x
+
+    r = np.sqrt(rx**2 + ry**2 + rz**2)
+    r3 = r**3
+    r5 = r3 * r**2
+
+    # ------------------------------------------------------------------
+    # State derivative (two-body)
+    # ------------------------------------------------------------------
+    dx = np.zeros(6)
+
+    dx[0] = vx
+    dx[1] = vy
+    dx[2] = vz
+    dx[3] = -mu * rx / r3
+    dx[4] = -mu * ry / r3
+    dx[5] = -mu * rz / r3
+
+    # ------------------------------------------------------------------
+    # System matrix A (Jacobian of dynamics)
+    # ------------------------------------------------------------------
+    A = np.zeros((6, 6))
+
+    # Position-velocity coupling
+    A[0, 3] = 1
+    A[1, 4] = 1
+    A[2, 5] = 1
+
+    # Gravity partials
+    A41 = -mu * (1/r3 - 3*rx*rx/r5)
+    A42 =  3*mu*rx*ry/r5
+    A43 =  3*mu*rx*rz/r5
+
+    A52 = -mu * (1/r3 - 3*ry*ry/r5)
+    A53 =  3*mu*ry*rz/r5
+
+    A63 = -mu * (1/r3 - 3*rz*rz/r5)
+
+    A[3, 0] = A41
+    A[3, 1] = A42
+    A[3, 2] = A43
+
+    A[4, 0] = A42
+    A[4, 1] = A52
+    A[4, 2] = A53
+
+    A[5, 0] = A43
+    A[5, 1] = A53
+    A[5, 2] = A63
+
+    # ------------------------------------------------------------------
+    # STM derivative
+    # ------------------------------------------------------------------
+    dphi = A @ phi
+
+    # ------------------------------------------------------------------
+    # Pack output
+    # ------------------------------------------------------------------
+    dX = np.zeros_like(X)
+    dX[:n] = dx
+    dX[n:] = dphi.reshape(n * n)
+
+    return dX
+
+def extract_measurement(X):
+    """
+    X = [x, y, z, vx, vy, vz]
+    generate simulated measurement wrt sensor placed in Earth's center
+
+    Returns:
+        Hk_til (3x6 numpy array)
+        Gk     (3,) numpy array (ra, dec, range)
+    """
+
+    
+    posX, posY, posZ = X[0], X[1], X[2]
+
+    r = np.sqrt(posX**2 + posY**2 + posZ**2)
+
+    r2 = r**2
+    r3 = r**3
+    posX2 = posX**2
+    posY2 = posY**2
+    posZ2 = posZ**2
+
+    # Measurement vector
+    ra = np.arctan2(posY, posX)
+    dec = np.arcsin(posZ / r)
+    Gk = np.array([ra, dec, r])
+
+    # Jacobian elements
+    H11 = -posY / (posX2 + posY2)
+    H12 =  posX / (posX2 + posY2)
+
+    denom_xy = np.sqrt(posX2 + posY2)
+
+    H21 = -posZ * posX / (r2 * denom_xy)
+    H22 = -posZ * posY / (r2 * denom_xy)
+    H23 = (1/r - posZ2/r3) / np.sqrt(1 - posZ2/r2)
+
+    H31 = posX / r
+    H32 = posY / r
+    H33 = posZ / r
+
+    # Build Jacobian (3x6)
+    Hk_til = np.zeros((3, 6))
+    Hk_til[0, :3] = [H11, H12, 0.0]
+    Hk_til[1, :3] = [H21, H22, H23]
+    Hk_til[2, :3] = [H31, H32, H33]
+
+    return Hk_til, Gk
