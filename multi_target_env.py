@@ -266,10 +266,10 @@ class MultiTargetEnv(gym.Env):
 
             # compute measurement related to action
             if target_id and idx == micro:
-                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R)
-                iG = compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
+                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement)
+                iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probFull = compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                probFull = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
@@ -278,7 +278,7 @@ class MultiTargetEnv(gym.Env):
                 #total_iG = iG
                 
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probFull = compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                probFull = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
@@ -709,12 +709,13 @@ class MultiTargetEnv(gym.Env):
             [H11, H12, 0.0, 0.0],  # Bearing partials
             [H21, H22, 0.0, 0.0]   # Range partials
         ])
-        return theta, r, H
+        Gk = np.array([theta, r])
+        return H, Gk
     
     
-    def ekf_update(x, P, R):
+    def ekf_update(x, P, R, obsFcn):
         """
-        Perform one EKF measurement update (range-bearing).
+        Perform one EKF measurement update.
         Inputs:
             x: state vector (4,)
             P: covariance matrix (4x4)
@@ -723,10 +724,10 @@ class MultiTargetEnv(gym.Env):
             x_upd, P_upd
         """
         # Predict measurement
-        theta, r, H = MultiTargetEnv.extract_measurement(x)
+        H, Gk = obsFcn(x)
         
         # Innovation
-        y = np.array([0.0, 0.0])
+        y = np.zeros_like(Gk)
         
         # Innovation covariance
         S = H @ P @ H.T + R
@@ -740,53 +741,123 @@ class MultiTargetEnv(gym.Env):
         
         return x_upd, P_upd
 
-def compute_kl_divergence(mean_p, cov_p, mean_q, cov_q):
-    """
-    Compute the Kullback–Leibler divergence D_KL(P || Q) between two multivariate Gaussians.
+    @staticmethod
+    def compute_kl_divergence(mean_p, cov_p, mean_q, cov_q):
+        """
+        Compute the Kullback–Leibler divergence D_KL(P || Q) between two multivariate Gaussians.
 
-    Parameters
-    ----------
-    mean_p : np.ndarray
-        Mean vector of distribution P (n,)
-    cov_p : np.ndarray
-        Covariance matrix of distribution P (n x n)
-    mean_q : np.ndarray
-        Mean vector of distribution Q (n,)
-    cov_q : np.ndarray
-        Covariance matrix of distribution Q (n x n)
+        Parameters
+        ----------
+        mean_p : np.ndarray
+            Mean vector of distribution P (n,)
+        cov_p : np.ndarray
+            Covariance matrix of distribution P (n x n)
+        mean_q : np.ndarray
+            Mean vector of distribution Q (n,)
+        cov_q : np.ndarray
+            Covariance matrix of distribution Q (n x n)
 
-    Returns
-    -------
-    float
-        The KL divergence D_KL(P || Q)
-    """
-    n = mean_p.shape[0]
+        Returns
+        -------
+        float
+            The KL divergence D_KL(P || Q)
+        """
+        n = mean_p.shape[0]
 
-    # Ensure inputs are NumPy arrays
-    mean_p = np.atleast_1d(mean_p)
-    mean_q = np.atleast_1d(mean_q)
-    cov_p = np.atleast_2d(cov_p)
-    cov_q = np.atleast_2d(cov_q)
+        # Ensure inputs are NumPy arrays
+        mean_p = np.atleast_1d(mean_p)
+        mean_q = np.atleast_1d(mean_q)
+        cov_p = np.atleast_2d(cov_p)
+        cov_q = np.atleast_2d(cov_q)
 
-    # Compute inverses and determinants
-    inv_cov_q = np.linalg.inv(cov_q)
-    det_cov_p = np.linalg.det(cov_p)
-    det_cov_q = np.linalg.det(cov_q)
+        # Compute inverses and determinants
+        inv_cov_q = np.linalg.inv(cov_q)
+        det_cov_p = np.linalg.det(cov_p)
+        det_cov_q = np.linalg.det(cov_q)
 
-    # Compute trace term
-    trace_term = np.trace(inv_cov_q @ cov_p)
+        # Compute trace term
+        trace_term = np.trace(inv_cov_q @ cov_p)
 
-    # Mean difference
-    mean_diff = mean_q - mean_p
-    mean_term = mean_diff.T @ inv_cov_q @ mean_diff
+        # Mean difference
+        mean_diff = mean_q - mean_p
+        mean_term = mean_diff.T @ inv_cov_q @ mean_diff
 
-    # Log determinant ratio term
-    log_det_term = np.log(det_cov_q / det_cov_p)
+        # Log determinant ratio term
+        log_det_term = np.log(det_cov_q / det_cov_p)
 
-    # Combine terms (0.5 * [log|Σq|/|Σp| - n + Tr(invΣq Σp) + (μq - μp)^T invΣq (μq - μp)])
-    d_kl = 0.5 * (log_det_term - n + trace_term + mean_term)
+        # Combine terms (0.5 * [log|Σq|/|Σp| - n + Tr(invΣq Σp) + (μq - μp)^T invΣq (μq - μp)])
+        d_kl = 0.5 * (log_det_term - n + trace_term + mean_term)
 
-    return float(d_kl)
+        return float(d_kl)
+
+    @staticmethod
+    def compute_fov_prob_full(P, fov_x, fov_y=None, rtol=1e-8):
+        """
+        Compute probability that a 2D Gaussian state remains inside a rectangular FOV
+        using full covariance integration (no independence assumption).
+        This function can be used as well to approximate the FOV probability for a sensor 
+        located in Earth center pointing towards geostationary satellites.
+
+        This function should not be used for large FOV and for satellites with large
+        declination angles. 
+
+        Parameters
+        ----------
+        P : 2x2 numpy array
+            Position covariance matrix
+        fov_x : float
+            Full FOV width in x
+        fov_y : float, optional
+            Full FOV width in y (defaults to fov_x)
+        rtol : float
+            Relative tolerance for quadrature
+
+        Returns
+        -------
+        prob : float
+            Probability of remaining inside the FOV
+        """
+
+        if fov_y is None:
+            fov_y = fov_x
+
+        hx = fov_x / 2.0
+        hy = fov_y / 2.0
+
+        # slice P to only take into account positional/angular values
+        P2 = P[0:2, 0:2]
+        w, _ = np.linalg.eig(P2)
+
+        # Ensure positive definiteness if needed
+        detP = np.linalg.det(P2)
+        if detP <= 0:
+            raise ValueError("Covariance matrix must be positive definite")
+
+        Pinv = np.linalg.inv(P2)
+
+        # Gaussian exponent
+        def integrand(y, x):
+            quad = (
+                Pinv[0, 0] * x**2
+                + (Pinv[0, 1] + Pinv[1, 0]) * x * y
+                + Pinv[1, 1] * y**2
+            )
+            return math.exp(-0.5 * quad)
+
+        atol = 1e-13
+
+        integral = dblquad(
+            integrand,
+            -hx, hx,
+            lambda x: -hy,
+            lambda x:  hy,
+            epsabs=atol,
+            epsrel=rtol
+        )[0]
+
+        prob = (1.0 / (2.0 * math.pi * math.sqrt(detP))) * integral
+        #print(f"{integral}; {detP}; {prob}; {w}")
+        return prob
 
 def mahalanobis_distance(x, mean, cov):
     diff = x - mean
@@ -794,11 +865,12 @@ def mahalanobis_distance(x, mean, cov):
 
 def compute_fov_prob_single(fov, x, P):
     """
-    Compute FOV-retention probability reward for neglected targets.
+    Compute FOV-probability analytically under the assumption that the integration 
+    axes are independent.
     """
 
-    #half_fov = fov*0.75 / 2.0   # radians or degrees, consistent with measurement model
-    half_fov = fov / 2.0   # radians or degrees, consistent with measurement model
+    #half_fov = fov*0.75 / 2.0   # radians 
+    half_fov = fov / 2.0   # radians 
 
     prob = 1.0
     for i in range(2):
@@ -813,67 +885,7 @@ def compute_fov_prob_single(fov, x, P):
         # Gaussian N(0, σ)
         dist = norm(loc=0.0, scale=pos_std)
         prob *= dist.cdf(half_fov) - dist.cdf(-half_fov)
-
     return prob
 
-def compute_fov_prob_full(P, fov_x, fov_y=None, rtol=1e-8):
-    """
-    Compute probability that a 2D Gaussian state remains inside a rectangular FOV
-    using full covariance integration (no independence assumption).
 
-    Parameters
-    ----------
-    P : 2x2 numpy array
-        Position covariance matrix
-    fov_x : float
-        Full FOV width in x
-    fov_y : float, optional
-        Full FOV width in y (defaults to fov_x)
-    rtol : float
-        Relative tolerance for quadrature
-
-    Returns
-    -------
-    prob : float
-        Probability of remaining inside the FOV
-    """
-
-    if fov_y is None:
-        fov_y = fov_x
-
-    hx = fov_x / 2.0
-    hy = fov_y / 2.0
-
-    # slice P to only take into account positional values
-    P2 = P[0:2, 0:2]
-
-    # Ensure positive definiteness if needed
-    detP = np.linalg.det(P2)
-    if detP <= 0:
-        raise ValueError("Covariance matrix must be positive definite")
-
-    Pinv = np.linalg.inv(P2)
-
-    # Gaussian exponent
-    def integrand(y, x):
-        quad = (
-            Pinv[0, 0] * x**2
-            + (Pinv[0, 1] + Pinv[1, 0]) * x * y
-            + Pinv[1, 1] * y**2
-        )
-        return math.exp(-0.5 * quad)
-
-    atol = 1e-13
-
-    integral = dblquad(
-        integrand,
-        -hx, hx,
-        lambda x: -hy,
-        lambda x:  hy,
-        epsabs=atol,
-        epsrel=rtol
-    )[0]
-
-    prob = (1.0 / (2.0 * math.pi * math.sqrt(detP))) * integral
-
-    return prob
+    
