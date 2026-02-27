@@ -2,30 +2,34 @@ from matplotlib import pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.integrate import solve_ivp
+import inspect
 
 from multi_target_env import MultiTargetEnv
 
 # ----------------------
 # Continuous-time dynamics and Jacobians
 # ----------------------
-@staticmethod
-def f_cv_cont(x):
+
+def f_cv_cont(x, omega=0):
     # state: [px,py,vx,vy]
     px, py, vx, vy = x
     return np.array([vx, vy, 0.0, 0.0])
-@staticmethod
-def Fx_cv_cont(x):
+
+
+def Fx_cv_cont(x, omega=0):
     Fx = np.zeros((4,4))
     Fx[0,2] = 1.0
     Fx[1,3] = 1.0
     return Fx
+
 @staticmethod
-def f_ct_no_heading_cont(x):
+def f_ct(x):
     # state: [px,py,vx,vy,omega]
     px, py, vx, vy, omega = x
     return np.array([vx, vy, -omega * vy, omega * vx, 0.0])
-@staticmethod
-def Fx_ct_no_heading_cont(x):
+
+
+def Fx_ct(x):
     px, py, vx, vy, omega = x
     Fx = np.zeros((5,5))
     Fx[0,2] = 1.0
@@ -36,17 +40,32 @@ def Fx_ct_no_heading_cont(x):
     Fx[3,4] = vx
     return Fx
 
-# -----------------------------------------------------------
-# Helper: propagate (state + STM) using solve_ivp
-# -----------------------------------------------------------
-def propagate_state_and_stm(t0, t1, x0, Phi0_vec, f_dyn, Fx_dyn, n,
+
+def f_ct_linear(x, omega):
+    # state: [px,py,vx,vy,omega]
+    px, py, vx, vy = x
+    return np.array([vx, vy, -omega * vy, omega * vx])
+
+
+def Fx_ct_linear(x, omega):
+    px, py, vx, vy = x
+    Fx = np.zeros((4,4))
+    Fx[0,2] = 1.0
+    Fx[1,3] = 1.0
+    Fx[2,3] = -omega
+    Fx[3,2] = omega
+    return Fx
+
+#  propagate (state + STM) 
+def propagate_state_and_stm(t0, t1, x0, Phi0_vec, f_dyn, Fx_dyn, n, omega=0,
                             rtol=1e-6, atol=1e-8):
 
     def dyn_with_stm(t, z):
         x = z[:n]
         Phi = z[n:].reshape((n, n))
-        dx = f_dyn(x)
-        Fx = Fx_dyn(x)
+        
+        dx = f_dyn(x, omega)
+        Fx = Fx_dyn(x, omega)
         dPhi = Fx @ Phi
         return np.concatenate([dx, dPhi.reshape(-1)])
 
@@ -69,8 +88,9 @@ def batch_estimate_single_target(
     P0,
     R,
     model,
+    omega=0,
     f_cv_cont=f_cv_cont, Fx_cv_cont=Fx_cv_cont,
-    f_ct_no_heading_cont=f_ct_no_heading_cont, Fx_ct_no_heading_cont=Fx_ct_no_heading_cont,
+    f_ct_cont=f_ct_linear, Fx_ct_cont=Fx_ct_linear,
     rtol=1e-6,
     atol=1e-8,
 ):
@@ -81,19 +101,20 @@ def batch_estimate_single_target(
     f_dyn / Fx_dyn chosen accordingly
     """
 
-    # --- choose model specifics ---
+    # choose either linear or rotational model
+    n = 4
     if model.upper() == "CV":
-        n = 4
-        f_dyn = lambda x: f_cv_cont(x)
-        Fx_dyn = lambda x: Fx_cv_cont(x)
+        
+        f_dyn = lambda x, omega=None: f_cv_cont(x)
+        Fx_dyn = lambda x, omega=None: Fx_cv_cont(x)
     elif model.upper() == "CT":
-        n = 5
-        f_dyn = lambda x: f_ct_no_heading_cont(x)
-        Fx_dyn = lambda x: Fx_ct_no_heading_cont(x)
+
+        f_dyn = lambda x, omega: f_ct_cont(x, omega)
+        Fx_dyn = lambda x, omega: Fx_ct_cont(x, omega)
     else:
         raise ValueError("Unknown model: choose 'CV' or 'CT'")
 
-    # Standard batch extraction
+    # extract time steps and observations
     t_obs = np.asarray(t_obs)
     y_obs = np.asarray(y_obs)
     L = len(t_obs)
@@ -102,6 +123,7 @@ def batch_estimate_single_target(
     resids = np.zeros((2, L))
 
     # Build batch matrices
+    P0 = P0[:4,:4]
     Cinv = np.linalg.inv(P0)
     Rinv = np.linalg.inv(R)
 
@@ -112,28 +134,24 @@ def batch_estimate_single_target(
     Phi = np.eye(n)
     x = x0_ref.copy()
 
-    Xref[:, 0] = x
+    Xref[:, 0] = x[:4]
 
-    # -----------------------------------------------------------
-    # FORWARD PASS (reference traj) and build Λ and N
-    # -----------------------------------------------------------
+    # build Λ and N
     for k in range(L):
 
         if k > 0:
             x, Phi = propagate_state_and_stm(
                 t_obs[k - 1], t_obs[k],
                 x, Phi.reshape(-1),
-                f_dyn, Fx_dyn, n,
+                f_dyn, Fx_dyn, n, omega,
                 rtol, atol
             )
 
-        Xref[:, k] = x
+        Xref[:, k] = x[:4]
 
         # measurement model
-        theta, rr, Htil = MultiTargetEnv.extract_measurement(x)
-        if model.upper() == "CT":
-            Htil = np.hstack([Htil, np.zeros((2, 1))])
-        yk = y_obs[k] - np.array([theta, rr])
+        Htil, Gk = MultiTargetEnv.extract_measurement(x)
+        yk = y_obs[k] - Gk
         resids[:, k] = yk
 
         # measurement Jacobian wrt initial state
@@ -143,15 +161,13 @@ def batch_estimate_single_target(
         Lambda += Hk.T @ Rinv @ Hk
         Nvec += Hk.T @ Rinv @ yk
 
-    # -----------------------------------------------------------
     # Solve normal equations Λ x = N
-    # -----------------------------------------------------------
     try:
         x0_correction = np.linalg.solve(Lambda, Nvec)
     except np.linalg.LinAlgError:
         x0_correction = np.linalg.pinv(Lambda) @ Nvec
 
-    x0_new = x0_ref + x0_correction
+    x0_new = x0_ref[:4] + x0_correction
 
     # posterior covariance of initial state
     try:
@@ -159,9 +175,7 @@ def batch_estimate_single_target(
     except np.linalg.LinAlgError:
         P0_post = np.linalg.pinv(Lambda)
 
-    # -----------------------------------------------------------
-    # FINAL forward propagation using corrected initial state
-    # -----------------------------------------------------------
+    # propagate state and stm
     Xest = np.zeros((n, L))
     P_mat = np.zeros((n, n, L))
 
@@ -190,7 +204,8 @@ def batch_estimate_single_target(
         "P_mat": P_mat,
         "resids": resids,
         "Lambda": Lambda,
-        "Nvec": Nvec
+        "Nvec": Nvec,
+        "omega": omega
     }
 
 # Residuals for CV: params = [px0, py0, vx0, vy0]
@@ -201,9 +216,9 @@ def residuals_cv(params, t_obs, y_obs, R_sqrt_inv=None):
     thetas = []
     rs = []
     for s in states:
-        th, rr, _ = MultiTargetEnv.extract_measurement(s)
-        thetas.append(th)
-        rs.append(rr)
+        H, Gk = MultiTargetEnv.extract_measurement(s)
+        thetas.append(Gk[0])
+        rs.append(Gk[1])
     thetas = np.array(thetas)
     rs = np.array(rs)
 
@@ -226,23 +241,18 @@ def residuals_cv(params, t_obs, y_obs, R_sqrt_inv=None):
             res_whitened[2*i:2*i+2] = w2
         return res_whitened
     return res
-# ------------------------
-# Reuse the continuous-time dynamics from before
-# CV dynamics (state: [px,py,vx,vy], n=4)
-def f_cv_cont(x):
-    px, py, vx, vy = x
-    return np.array([vx, vy, 0.0, 0.0])
+
 
 # CT (no-heading) dynamics (state: [px,py,vx,vy,omega], n=5)
-def f_ct_no_heading_cont(x):
+def f_ct(x):
     px, py, vx, vy, omega = x
     return np.array([vx, vy, -omega * vy, omega * vx, 0.0])
 
 # ------------------------
 # helper: measurement prediction for a state vector (4D px,py,vx,vy)
 def predict_measurement_from_state(x4):
-    theta, r, _ = MultiTargetEnv.extract_measurement(x4)
-    return np.array([theta, r])
+    H, Gk = MultiTargetEnv.extract_measurement(x4)
+    return Gk
 
 # ------------------------
 # helper: angle residual wrap to [-pi, pi]
@@ -273,14 +283,14 @@ def integrate_and_sample(f_dyn, x0, t_obs, rtol=1e-9, atol=1e-9):
 # Residuals for CT: params = [px0, py0, vx0, vy0, omega]
 def residuals_ct(params, t_obs, y_obs, R_sqrt_inv=None):
     x0 = np.asarray(params)
-    states = integrate_and_sample(f_ct_no_heading_cont, x0, t_obs)  # shape (L,5)
+    states = integrate_and_sample(f_ct, x0, t_obs)  # shape (L,5)
     thetas = []
     rs = []
     for s in states:
         # pass only first 4 entries to measurement function
-        th, rr, _ = MultiTargetEnv.extract_measurement(s[:4])
-        thetas.append(th)
-        rs.append(rr)
+        H, Gk = MultiTargetEnv.extract_measurement(s[:4])
+        thetas.append(Gk[0])
+        rs.append(Gk[1])
     thetas = np.array(thetas)
     rs = np.array(rs)
 
@@ -386,8 +396,8 @@ def estimate_all_targets_from_tracks(tracks, env, R=None, **batch_kwargs):
         # --- Convert ground-truth states → measurements ---
         y_obs = []
         for x in truth_states:
-            th, rr, _ = MultiTargetEnv.extract_measurement(x)
-            y_true = np.array([th, rr])
+            H, Gk = MultiTargetEnv.extract_measurement(x)
+            y_true = Gk
             # Add measurement noise from R
             noise = np.random.multivariate_normal(mean=np.zeros(2), cov=R)
             y_noisy = y_true + noise
@@ -440,6 +450,7 @@ def estimate_all_targets_from_tracks(tracks, env, R=None, **batch_kwargs):
             P0,
             R,
             model=chosen_model,
+            omega=env.motion_params[tgt_id],
             **batch_kwargs
         )
 
@@ -455,10 +466,11 @@ def generate_truth_states(t_vec, tgt_id, env):
 
     # State dimension
     n = env.targets[0]["x"].shape[0]
-    if env.motion_model[tgt_id] == "T":
-        n = 5
+    """ if env.motion_model[tgt_id] == "T":
+        #n = 5
+        n=4
     else:
-        n = 4
+        n = 4 """
 
     # Allocate output
     truth_states = np.zeros((len(t_vec), n))
@@ -471,8 +483,8 @@ def generate_truth_states(t_vec, tgt_id, env):
     else:
         x0 = env.targets[tgt_id]["x"].copy()
 
-    if env.motion_model[tgt_id] == "T":     # CT model has ω (turn rate)
-        x0 = np.append(x0, env.motion_params[tgt_id])
+    """ if env.motion_model[tgt_id] == "T":     # CT model has ω (turn rate)
+        x0 = np.append(x0, env.motion_params[tgt_id]) """
 
     Phi0 = np.eye(n).reshape(-1)
 
@@ -482,7 +494,7 @@ def generate_truth_states(t_vec, tgt_id, env):
         if env.motion_model[tgt_id] == "T":
             x0, _ = propagate_state_and_stm(
                 0.0, t_first, x0, Phi0,
-                f_ct_no_heading_cont, Fx_ct_no_heading_cont, n
+                f_ct, Fx_ct, n
             )
         else:
             x0, _ = propagate_state_and_stm(
@@ -491,9 +503,9 @@ def generate_truth_states(t_vec, tgt_id, env):
             )
 
     # Store initial propagated truth
-    truth_states[0] = x0
-    theta, r, H = MultiTargetEnv.extract_measurement(x0[:4])
-    measurements[0,:] = np.array([theta, r])
+    truth_states[0] = x0[:4]
+    H, Gk = MultiTargetEnv.extract_measurement(x0[:4])
+    measurements[0,:] = Gk
     H_mod.append(H)
 
     # --- Propagate through all times ---
@@ -504,7 +516,7 @@ def generate_truth_states(t_vec, tgt_id, env):
         if env.motion_model[tgt_id] == "T":
             x_next, _ = propagate_state_and_stm(
                 t0, t1, x0, Phi0,
-                f_ct_no_heading_cont, Fx_ct_no_heading_cont, n
+                f_ct_linear, Fx_ct_linear, n, env.motion_params[tgt_id]
             )
         else:
             x_next, _ = propagate_state_and_stm(
@@ -513,8 +525,8 @@ def generate_truth_states(t_vec, tgt_id, env):
             )
 
         truth_states[k+1] = x_next
-        theta, r, H = MultiTargetEnv.extract_measurement(x_next[:4])
-        measurements[k+1,:] = [theta, r]
+        H, Gk = MultiTargetEnv.extract_measurement(x_next[:4])
+        measurements[k+1,:] = Gk
         H_mod.append(H)
 
 
@@ -525,9 +537,8 @@ def generate_truth_states(t_vec, tgt_id, env):
 # -------------------------------------------------------------------------
 # 1. Extract states, covariances, and compute errors + sigma bounds
 # -------------------------------------------------------------------------
-def process_estimates(tracks, estimates, env):
+def process_estimates(t_vec, estimates, env):
     """
-    tracks: output of extract_tracks_from_log
     estimates: output of estimate_all_targets_from_tracks
 
     Returns:
@@ -545,13 +556,13 @@ def process_estimates(tracks, estimates, env):
     sigma_by_target = {}
     t_by_target = {}
 
-    for tgt_id, track in tracks.items():
+    for tgt_id, est in estimates.items():
 
         # Extract timestamps
-        t_vec = np.array([entry["t"] for entry in track])
+        #t_vec = np.array(est["timesteps"])
 
         # --- Generate truth states ---
-        truth_states = generate_truth_states(t_vec, tgt_id, env)
+        truth_states, measurements, H_mod = generate_truth_states(t_vec, tgt_id, env)
         truth_by_target[tgt_id] = truth_states
 
         # --- Extract estimates ---
