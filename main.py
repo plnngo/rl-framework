@@ -1259,6 +1259,7 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
                                 #"Q": np.eye(2) * 1e-27,
                                 "Q": np.eye(2) * 0.,
                                 "Po": tgt['P'],
+                                "omega": omega,
                                 "f_dyn": f_dyn,
                                 "Fx_dyn": Fx_dyn
                             }
@@ -2172,8 +2173,8 @@ def main():
  """
  
 if __name__ == "__main__":
-    main()
+    #main()
     #kalmanPlots()
     #rmsePlot()
-    #efficiencyPlot()
+    efficiencyPlot()
     #efficiencyOtherPlot()
