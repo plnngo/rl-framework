@@ -52,7 +52,9 @@ def select_best_action(env, dt=None):
 
         # 3. Compute information gain (KL divergence)/ complementary probability
         ig = MultiTargetEnv.compute_kl_divergence(x_pred, P_pred, x_upd, P_upd)
-        risk = 1-compute_fov_prob_single(env.fov_size, x_pred, P_pred)
+        prob = MultiTargetEnv.compute_fov_prob_full(P_pred, env.fov_size, env.fov_size)
+
+        risk = 1-prob
 
         # 4. Keep the best
         """ if ig > best_ig:
