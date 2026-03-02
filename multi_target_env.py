@@ -59,6 +59,11 @@ class MultiTargetEnv(gym.Env):
         self.grid_coords = np.array([[x, y] for x in x_vals for y in y_vals])
         self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)
 
+        # Initialise maps as 2D
+        self.detection_history = np.zeros((n_grid, n_grid), dtype=np.float32)
+        self.recency_map = np.zeros((n_grid, n_grid), dtype=np.float32)
+        self.roi_mask = self._build_roi_mask()
+
         """ # OBSERVATION: all targets (max_targets) * per-target obs + mask_length
         obs_len = self.max_targets * self.obs_dim_per_target + self.max_targets
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf,
@@ -66,10 +71,16 @@ class MultiTargetEnv(gym.Env):
         if mode == "search":
             # Observation is just visit counts
             obs_len = self.n_grid_cells
-            self.observation_space = gym.spaces.Box(
+            """ self.observation_space = gym.spaces.Box(
                 low=0,
                 high=np.inf,
                 shape=(obs_len,),
+                dtype=np.float32
+            ) """
+                        # Shape becomes (4, n_grid, n_grid) — four information channels
+            self.observation_space = gym.spaces.Box(
+                low=0.0, high=1.0,
+                shape=(4, n_grid, n_grid),
                 dtype=np.float32
             )
 
@@ -107,6 +118,16 @@ class MultiTargetEnv(gym.Env):
 
         self.reset(seed=seed)
 
+    def _build_roi_mask(self):
+        n_grid = np.sqrt(self.n_grid_cells)
+        mask = np.zeros((n_grid, n_grid), dtype=np.float32)
+        for grid_idx, search_pos in enumerate(self.grid_coords):
+            x_index = grid_idx // n_grid
+            y_index = grid_idx % n_grid
+            if search_pos[1] > 0:
+                mask[x_index, y_index] = 1.0
+        return mask
+    
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
 
@@ -126,6 +147,12 @@ class MultiTargetEnv(gym.Env):
             for i in range(self.init_n_unknown_target)
         ]
         self.visit_counts[:] = 0   # reset search visit counts
+        self.detection_history[:] = 0.0
+        self.recency_map[:] = 0.0
+
+        self.episode_detection_reward = 0.0
+        self.episode_roi_reward = 0.0
+        self.episode_n_detections = 0
 
         # Initialize search memory variables here
         self.last_search_idx = None
@@ -218,6 +245,7 @@ class MultiTargetEnv(gym.Env):
         micro = [0., 0.]
         target_id = []
         search_pos = None
+        n_grid = np.sqrt(self.n_grid_cells)
 
         if macro == 0:  # SEARCH
             grid_idx = micro_search
@@ -411,6 +439,10 @@ class MultiTargetEnv(gym.Env):
                 return obs, reward, terminated, truncated, info
 
         # Compute reward
+        # Convert flat grid_idx to 2D coordinates
+        x_index = grid_idx // n_grid
+        y_index = grid_idx % n_grid
+
         if len(detections) > 0:
             threshold = 3.0  # example Mahalanobis threshold
             for det in detections:
@@ -424,8 +456,17 @@ class MultiTargetEnv(gym.Env):
                     # Promote detection to a new known target
                     self._add_new_tracking_target(det['id'])
                     target_id.append(det['id'])
+                    self.detection_history[x_index, y_index] = min(
+                        self.detection_history[x_index, y_index] + 1.0, 1.0
+                    )
                     
         # --- SEARCH macro: update visit counts and compute reward ---
+        # Update recency map — decay everything, then mark current location
+        self.recency_map *= 0.99
+        self.recency_map[x_index, y_index] = 1.0
+
+        # Update detection history — decay everything
+        self.detection_history *= 0.95
         self.visit_counts[grid_idx] += 1
         reward = total_iG
         """ exploration_bonus = 1.0 / np.log(self.visit_counts[grid_idx] + 2)
@@ -441,7 +482,11 @@ class MultiTargetEnv(gym.Env):
         if search_pos[1] > 0:  # cell in upper half
             exploration_bonus += 1.0   
 
-        reward += exploration_bonus
+        #reward += exploration_bonus
+        # Accumulate episode stats
+        self.episode_detection_reward += total_iG
+        self.episode_roi_reward += exploration_bonus
+        self.episode_n_detections += len(detections)
 
         # Construct next observation
         obs = self._get_obs()
@@ -452,7 +497,14 @@ class MultiTargetEnv(gym.Env):
         truncated = False
 
         # Info dict can include diagnostics
-        info = {"macro": macro, "micro": micro, "target_id": target_id, "reward_info_gain": total_iG, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
+        info = {"macro": macro, "micro": micro, 
+                "target_id": target_id, 
+                "reward_info_gain": total_iG, 
+                "action_mask": self.get_action_mask(), 
+                "lost_target": lost_targets, 
+                "episode_detection_reward": self.episode_detection_reward,
+                "episode_roi_reward": self.episode_roi_reward,
+                "episode_n_detections": self.episode_n_detections}
         self.obs = obs
 
         return obs, reward, done, truncated, info
@@ -512,7 +564,28 @@ class MultiTargetEnv(gym.Env):
     def _get_obs(self, target_id=None):
         """Flatten all target states and covariances into one observation vector."""
         if self.mode=="search":
-            return self.visit_counts.astype(np.float32)
+            n_grid = np.sqrt(self.n_grid_cells)
+            # Channel 1 — normalised visit counts
+            visit_2d = self.visit_counts.reshape(n_grid, n_grid).astype(np.float32)
+            visit_map = np.log1p(visit_2d) / np.log1p(visit_2d.max() + 1)
+            
+            # Channel 2 — recent detection map (decaying sum of past detections)
+            # Set to 1.0 where detection occurred, decay by 0.95 each step
+            detection_map = self.detection_history.copy()
+
+            # Channel 3 — recency map (1.0 = pointed here last step, decays over time)
+            recency_map = self.recency_map.copy()
+
+            # Channel 4 — ROI mask (static, 1.0 inside ROI, 0.0 outside)
+            roi_map = self.roi_mask.copy()
+
+            return np.stack([
+                visit_map,                  
+                detection_map,    
+                recency_map,           
+                roi_map,              
+            ], axis=0).astype(np.float32)
+            #return self.visit_counts.astype(np.float32)
             """ all_targets = self.targets + self.unknown_targets
             obs = []
             for tgt in all_targets:
