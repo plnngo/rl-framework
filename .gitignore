@@ -9,3 +9,10 @@ rl-env/share/man/man1/
 /__pycache__/
 *.zip
 results/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# VS Code
+.vscode/
