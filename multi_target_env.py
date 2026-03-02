@@ -34,7 +34,7 @@ class MultiTargetEnv(gym.Env):
 
         # Parameters related to dynamical motion
         self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
-        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets)          # contains either linear velocity or turn rate
+        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets) / 10        # contains either linear velocity or turn rate
 
         # Cholesky size for covariance packing
         self.cholesky_size = d_state * (d_state + 1) // 2
@@ -42,8 +42,8 @@ class MultiTargetEnv(gym.Env):
         self.max_targets = self.init_n_targets + self.init_n_unknown_target
 
         # Default initial covariance for new tracks (make accessible as self.P0)
-        self.P0 = np.eye(self.d_state) * 0.2
-        self.P0[-2:, -2:] = np.eye(2) * 0.05
+        self.P0 = np.eye(self.d_state) * 0.1
+        self.P0[-2:, -2:] = np.eye(2) * 0.001
         self.Q0 = np.eye(self.d_state) * 1e-1
 
         # Discretising entire field 
@@ -268,8 +268,8 @@ class MultiTargetEnv(gym.Env):
             if target_id and idx == micro:
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement)
                 iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
-                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probFull = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                probSimple = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                prob = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
@@ -277,8 +277,8 @@ class MultiTargetEnv(gym.Env):
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
                 #total_iG = iG
                 
-                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probFull = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                probSimple = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                prob = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
@@ -289,7 +289,8 @@ class MultiTargetEnv(gym.Env):
 
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
-                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                prob = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                probSimple = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
                 #print(1-prob)
                 """ if (1-prob)>total_iG:
                     total_iG = 1-prob
@@ -543,7 +544,8 @@ class MultiTargetEnv(gym.Env):
         for i, tgt in enumerate(all_targets):
             x, y, vx, vy = tgt["x"]
             trace = np.trace(tgt["P"])
-            p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
+            p_fov = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+            #p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
             known = 1.0 if self.known_mask[tgt["id"]] else 0.0
             
             # Provide more informative features:
@@ -664,7 +666,7 @@ class MultiTargetEnv(gym.Env):
         """
 
         #modify omega to increase radius of targets
-        omega = omega / 10
+        #omega = omega / 10
         wdt = omega * dt
         # handle small w via stable evaluations:
         if abs(wdt) < 1e-8:
