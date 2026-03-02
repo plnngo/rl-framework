@@ -17,7 +17,7 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps =60_000
+total_timesteps =100_000
 mode = "track"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
@@ -118,18 +118,17 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            learning_rate= 5.449952468830448e-05, #8.399722143201183e-05, #0.00010077055018104607, #0.00034674195012021614, #0.00016587775102695835, #0.00010685084135079141,
-            buffer_size=30000, #30000,
-            batch_size=128, #64, #32,
-            gamma=0.9728252031515489, #0.9558374288830532, #0.9578429379766629, #0.9296592176892341, #0.9576075081024715, #0.9001853852142295,
-            train_freq=4, #1,
+            learning_rate= 8.450225441659817e-05,
+            buffer_size=50000,
+            batch_size=32,
+            gamma=0.9564895579103538,
             gradient_steps=8, #4,
-            learning_starts=10000, #1000, #5000,
-            exploration_fraction= 0.6102870049368956, #0.5040249936593768, #0.5207217410900746, #0.5742209831043317, #0.7893585250785973, #0.7398965813587768,
-            exploration_final_eps= 0.031764573244963186, # 0.030534260752888866, #0.08327658175267656, #0.03548013259170907, #0.09706959490521018, #0.03683504126497514,
-            target_update_interval=12000, #8000,
-            max_grad_norm= 1.1777762743735063, #0.8178478937152223, #0.2673890378339314, #0.7279834488656272, #1.3411398428359127, #0.6395054936295579,
-            policy_kwargs=dict(net_arch=[256, 256]), #128, 128
+            learning_starts=5000,
+            exploration_fraction= 0.6439219138656918,
+            exploration_final_eps= 0.02838206605656649,
+            target_update_interval=15000,
+            max_grad_norm= 1.805905030739738,
+            policy_kwargs=dict(net_arch=[128, 128]),
             verbose=1,
         )
     else:
@@ -219,7 +218,7 @@ def main():
         return ActionMasker(base_env, lambda env: env.action_masks())
     
     env_mppo = DummyVecEnv([make_masked_env])
-    train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
+    #train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
 
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)
@@ -229,7 +228,7 @@ def main():
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)

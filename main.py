@@ -178,6 +178,8 @@ def run_random_policy_track(env, n_steps):
         #action = int(env.rng.choice(valid_ids))
         action = 1
         obs, reward, done, truncated, info = env.step(action)
+        if len(info["lost_target"]) > 0:
+            print(f"Step {step+1:02d}: lost target")
         """ for tgt in range(env.n_targets):
             exceed, x, P = analyse_tracking_task(obs, tgt, env, confidence=0.95)
             if exceed:
@@ -234,7 +236,7 @@ def run_random_policy_track(env, n_steps):
 
     # --- Show all figures together at the end ---
     print(env.n_targets)
-    plt.show()
+    #plt.show()
     return np.array(positions), np.array(covariances)
 
 def run_random_policy_combined(env, n_steps):
@@ -1962,14 +1964,14 @@ def kalmanPlots():
 def main():
     # ****** Test with random policy ******
     n_targets = 5
-    #env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
     #n_episodes = 100
 
     #visualize_initial_positions(env)
 
     # Run random policy
     #positions, covariances = run_random_policy_search(env, n_steps=10)
-    #positions, covariances = run_random_policy_track(env, n_steps=20)
+    positions, covariances = run_random_policy_track(env, n_steps=100)
     #positions, covariances = run_random_policy_combined(env, n_steps=10)
 
     """ plot_positions(positions, env) 
@@ -1987,7 +1989,7 @@ def main():
     seeds = [42, 123, 321]
 
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
-    n_episodes = 100
+    n_episodes = 1
 
     # ****** Search ******
     # ****** Random policy ******

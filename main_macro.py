@@ -865,7 +865,7 @@ def mctsMain():
     n_targets = 5
     n_unknown_targets =100
 
-    # heuristic tracker
+    """ # heuristic tracker
     envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True, tracker=None)
     mcts095 = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.95)
     rewardsMcts, detection_countMcts095, exceedFOVMcts095, last_envMcts, last_episode_logMcts, knownMcts095, last_tasks_logMcts095, illegal_Mcts095 = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts095, n_episodes=n_episodes, random_policy=True, deterministic_policy=False) 
@@ -935,13 +935,13 @@ def mctsMain():
     # ****** Plot time spent on task ******
     plot_task_log(last_tasks_logMcts095, title="Gamma 0.95 - Action Timeline")
     plot_task_log(last_tasks_logMcts05, title="Gamma 0.5 - Action Timeline")
-    plot_task_log(last_tasks_logMcts01, title="Gamma 0.1 - Action Timeline")
+    plot_task_log(last_tasks_logMcts01, title="Gamma 0.1 - Action Timeline") """
 
     # mask ppo tracker
-    envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker="maskppo")
+    """ envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker="maskppo")
     mcts095 = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.95)
     rewardsMcts, detection_countMcts095, exceedFOVMcts095, last_envMcts, last_episode_logMcts, knownMcts095, last_tasks_logMcts095, illegal_Mcts095 = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts095, n_episodes=n_episodes, random_policy=True, deterministic_policy=False) 
-    print("Detections - 0.95 gamma - Heuristic tracker")
+    print("Detections - 0.95 gamma - maskppo tracker")
     print(sum(detection_countMcts095)/len(detection_countMcts095))
     print(np.std([np.mean(arr) for arr in detection_countMcts095], ddof=1))
     print("Lost")
@@ -956,7 +956,7 @@ def mctsMain():
 
     mcts05 = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.5)
     rewardsMcts, detection_countMcts05, exceedFOVMcts05, last_envMcts, last_episode_logMcts, knownMcts05, last_tasks_logMcts05, illegal_Mcts05 = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts05, n_episodes=n_episodes, random_policy=True, deterministic_policy=False) 
-    print("Detections - 0.5 gamma - Heuristic tracker")
+    print("Detections - 0.5 gamma - maskppo tracker")
     print(sum(detection_countMcts05)/len(detection_countMcts05))
     print(np.std([np.mean(arr) for arr in detection_countMcts05], ddof=1))
     print("Lost")
@@ -967,11 +967,11 @@ def mctsMain():
     print(np.std([np.mean(arr) for arr in knownMcts05], ddof=1))
     print("Illegal")
     print(sum(illegal_Mcts05)/len(illegal_Mcts05))
-    print(np.std([np.mean(arr) for arr in illegal_Mcts05], ddof=1))
+    print(np.std([np.mean(arr) for arr in illegal_Mcts05], ddof=1)) """
 
-    mcts01 = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.1)
+    """ mcts01 = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.1)
     rewardsMcts, detection_countMcts01, exceedFOVMcts01, last_envMcts, last_episode_logMcts, knownMcts01, last_tasks_logMcts01, illegal_Mcts01 = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts01, n_episodes=n_episodes, random_policy=True, deterministic_policy=False) 
-    print("Detections - 0.1 gamma - Heuristic tracker")
+    print("Detections - 0.1 gamma - maskppo tracker")
     print(sum(detection_countMcts01)/len(detection_countMcts01))
     print(np.std([np.mean(arr) for arr in detection_countMcts01], ddof=1))
     print("Lost")
@@ -1007,7 +1007,7 @@ def mctsMain():
     # ****** Plot time spent on task ******
     plot_task_log(last_tasks_logMcts095, title="Gamma 0.95 - Action Timeline")
     plot_task_log(last_tasks_logMcts05, title="Gamma 0.5 - Action Timeline")
-    plot_task_log(last_tasks_logMcts01, title="Gamma 0.1 - Action Timeline")
+    plot_task_log(last_tasks_logMcts01, title="Gamma 0.1 - Action Timeline") """
 
     # dqn tracker
     envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker="dqn")
