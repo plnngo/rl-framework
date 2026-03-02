@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from LSBatchFilter import propagate_state_and_stm
+
 @staticmethod
 def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
     """
@@ -40,6 +42,8 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
     Rk = inputs["Rk"]
     Q  = inputs["Q"]
     Po_bar = inputs["Po"]
+    f_dyn = inputs["f_dyn"]     
+    Fx_dyn = inputs["Fx_dyn"]
 
     # Initialization
     xhat = np.zeros(n)
@@ -57,6 +61,8 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
     # ODE tolerances
     ode_tol = 1e-12
+    rtol = 1e-6
+    atol = 1e-8
 
     prev_norm = 0
     converged = 0.05
@@ -64,8 +70,8 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
     # Kalman filter loop
     for k in range(L):
-
-        t = t_obs[k]
+        Yk = obs[k,:]
+        """ t = t_obs[k]
         t_prior = 0.0 if k == 0 else t_obs[k - 1]
         delta_t = t - t_prior
 
@@ -94,19 +100,36 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
             xout = sol.y[:, -1]
 
         Xref = xout[:n]
-        phi = xout[n:].reshape((n, n))
+        phi = xout[n:].reshape((n, n)) """
+        if k > 0:
+            Xref, Phi = propagate_state_and_stm(
+                t_obs[k - 1],
+                t_obs[k],
+                Xref,
+                np.eye(n).reshape(-1),
+                f_dyn,
+                Fx_dyn,
+                n,
+                inputs["omega"],
+                rtol,
+                atol
+            )
+        else:
+            Phi = np.eye(n)
 
         # -------------------------
         # Step C: Time update
         # -------------------------
-        Gamma = np.block([
+        """ Gamma = np.block([
             [(delta_t**2 / 2) * np.eye(2)],
             [delta_t * np.eye(2)]
-        ])
+        ]) """
 
-        xbar = phi @ xhat_prior
+        """ xbar = phi @ xhat_prior
         Pbar = phi @ P_prior @ phi.T + Gamma @ Q @ Gamma.T
-        print(Q)
+        print(Q) """
+        xbar = Phi @ xhat
+        Pbar = Phi @ P @ Phi.T #+ Q
 
         # -------------------------
         # Step D: Measurement update
