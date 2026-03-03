@@ -55,15 +55,16 @@ def objective(trial, shared_plotter=None):
         return -1e9   # or float("-inf")
 
     params = {
-        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 5e-4, log=True),
-        "n_steps": n_steps,
-        "batch_size": batch_size,
-        "gamma": trial.suggest_float("gamma", 0.88, 0.95),
-        "gae_lambda": trial.suggest_float("gae_lambda", 0.75, 0.9),
-        "clip_range": trial.suggest_float("clip_range", 0.3, 0.6),
-        "ent_coef": trial.suggest_float("ent_coef", 1e-4, 1e-2, log=True),
-        "vf_coef": trial.suggest_float("vf_coef", 0.4, 0.8),
-        "max_grad_norm": trial.suggest_float("max_grad_norm", 0.5, 1.0),
+            "learning_rate": trial.suggest_float("learning_rate", 5e-5, 5e-4, log=True),
+            "n_steps": n_steps,
+            "batch_size": batch_size,
+            "n_epochs": trial.suggest_categorical("n_epochs", [5, 10, 20]),
+            "gamma": trial.suggest_float("gamma", 0.95, 0.999),
+            "gae_lambda": trial.suggest_float("gae_lambda", 0.9, 0.99),
+            "clip_range": trial.suggest_float("clip_range", 0.1, 0.3),
+            "ent_coef": trial.suggest_float("ent_coef", 1e-4, 5e-2, log=True),
+            "vf_coef": trial.suggest_float("vf_coef", 0.4, 0.8),
+            "max_grad_norm": trial.suggest_float("max_grad_norm", 0.3, 1.0)
     }
     """ params = {
         "learning_rate": trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True),
@@ -80,7 +81,8 @@ def objective(trial, shared_plotter=None):
     trial_name = f"trial_{trial.number}"
     color = cm.get_cmap("tab20")(trial.number % 20) if shared_plotter else None
 
-    seeds = [42, 123, 321]
+    #seeds = [42, 123, 321]
+    seeds = [42]
     rewards = []
 
     for seed in seeds:

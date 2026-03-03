@@ -18,7 +18,7 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
 total_timesteps =100_000
-mode = "track"
+mode = "search"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -94,7 +94,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
             gae_lambda=0.8, #0.9668902419115192, #0.9190087075813886, #0.9572736445545191, #0.886078389184115,  
             n_epochs=10,
             clip_range=0.5, #0.17974547307789224, #0.32790623385659234, #0.3890633888493019, #0.38403499436025856,  
-            batch_size=256, #128, #32, #64,
+            batch_size=64, #128, #32, #64,
             verbose=1,
         )
 
@@ -223,12 +223,12 @@ def main():
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)

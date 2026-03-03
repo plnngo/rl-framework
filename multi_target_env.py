@@ -119,7 +119,7 @@ class MultiTargetEnv(gym.Env):
         self.reset(seed=seed)
 
     def _build_roi_mask(self):
-        n_grid = np.sqrt(self.n_grid_cells)
+        n_grid = int(np.sqrt(self.n_grid_cells))
         mask = np.zeros((n_grid, n_grid), dtype=np.float32)
         for grid_idx, search_pos in enumerate(self.grid_coords):
             x_index = grid_idx // n_grid
@@ -245,11 +245,12 @@ class MultiTargetEnv(gym.Env):
         micro = [0., 0.]
         target_id = []
         search_pos = None
-        n_grid = np.sqrt(self.n_grid_cells)
+        n_grid = int(np.sqrt(self.n_grid_cells))
 
         if macro == 0:  # SEARCH
             grid_idx = micro_search
             search_pos = self.grid_coords[grid_idx]
+
             micro = search_pos
         else:  # TRACK
             target_id.append(micro_track) 
@@ -564,7 +565,7 @@ class MultiTargetEnv(gym.Env):
     def _get_obs(self, target_id=None):
         """Flatten all target states and covariances into one observation vector."""
         if self.mode=="search":
-            n_grid = np.sqrt(self.n_grid_cells)
+            n_grid = int(np.sqrt(self.n_grid_cells))
             # Channel 1 — normalised visit counts
             visit_2d = self.visit_counts.reshape(n_grid, n_grid).astype(np.float32)
             visit_map = np.log1p(visit_2d) / np.log1p(visit_2d.max() + 1)

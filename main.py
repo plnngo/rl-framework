@@ -752,9 +752,9 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False, 
                 detect_count3 = detect_count3 + (known_targets - detections)
                 detections = known_targets """
             t=t+1
-        """ if ep == n_episodes - 1:
+        if ep == n_episodes - 1:
             visualize_search_pointing_heatmap(env, pointing_history)
-            visualize_unknown_target_heatmap(env, unknown_target_history) """
+            visualize_unknown_target_heatmap(env, unknown_target_history)
         rewards.append(total_reward)
         detection_count.append(env.detect_counter)
 
