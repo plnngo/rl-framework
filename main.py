@@ -752,9 +752,9 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False, 
                 detect_count3 = detect_count3 + (known_targets - detections)
                 detections = known_targets """
             t=t+1
-        """ if ep == n_episodes - 1:
+        if ep == n_episodes - 1:
             visualize_search_pointing_heatmap(env, pointing_history)
-            visualize_unknown_target_heatmap(env, unknown_target_history) """
+            visualize_unknown_target_heatmap(env, unknown_target_history)
         rewards.append(total_reward)
         detection_count.append(env.detect_counter)
 
@@ -1965,14 +1965,14 @@ def kalmanPlots():
 def main():
     # ****** Test with random policy ******
     n_targets = 5
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
+    #env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
     #n_episodes = 100
 
     #visualize_initial_positions(env)
 
     # Run random policy
     #positions, covariances = run_random_policy_search(env, n_steps=10)
-    positions, covariances = run_random_policy_track(env, n_steps=100)
+    #positions, covariances = run_random_policy_track(env, n_steps=100)
     #positions, covariances = run_random_policy_combined(env, n_steps=10)
 
     """ plot_positions(positions, env) 
@@ -2004,7 +2004,7 @@ def main():
 
     # ****** PPO agent ******
     env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
-    ppo_model = PPO.load("agents/ppo_search_trained_allRewards_IEEE", env=env)
+    ppo_model = PPO.load("agents/ppo_search_trained_slowTargets_obsSpace4Channels", env=env)
     ppo_rewards, ppo_detections = evaluate_agent_search(env, model=ppo_model, n_episodes=n_episodes, seed=seeds)
     print("Reward")
     print(sum(ppo_rewards)/len(ppo_rewards))
@@ -2173,8 +2173,8 @@ def main():
  """
  
 if __name__ == "__main__":
-    #main()
+    main()
     #kalmanPlots()
     #rmsePlot()
-    efficiencyPlot()
+    #efficiencyPlot()
     #efficiencyOtherPlot()
