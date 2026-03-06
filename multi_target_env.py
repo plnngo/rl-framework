@@ -787,6 +787,19 @@ class MultiTargetEnv(gym.Env):
         Gk = np.array([theta, r])
         return H, Gk
     
+    @staticmethod
+    def extract_measurement_XY(x):
+        posX = x[0]
+        posY = x[1]
+        Gk = np.array([posX, posY])
+
+        # Full Jacobian (2x4, assuming state = [x, y, vx, vy])
+        H = np.array([
+            [1.0, 0.0, 0.0, 0.0],  # x partials
+            [0.0, 1.0, 0.0, 0.0]   # y partials
+        ])
+        return H, Gk
+
     
     def ekf_update(x, P, R, obsFcn):
         """

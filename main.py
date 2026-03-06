@@ -6,7 +6,7 @@ from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 import KalmanFilter
 from LSBatchFilter import Fx_cv_cont, batch_estimate_single_target, estimate_all_targets_from_tracks, f_cv_cont, generate_truth_states, plot_errors_and_sigmas, process_estimates, f_ct_linear, Fx_ct_linear
-from deterministic_tracker import select_best_action
+from deterministic_tracker import select_best_action_pFOV
 from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
 import numpy as np
@@ -527,7 +527,7 @@ def analyse_tracking_task(target_idx, env, confidence=0.95):
 
     return full_major > float(env.fov_size), x, P
 
-def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, deterministic_policy=False, seed=None, maskable=False):
+def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, deterministic_policy=False, deterministic_policy_alternative = False, seed=None, maskable=False):
     rewards = []
     exceedFOV = []
     illegal_actions = []
@@ -553,7 +553,7 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                 action = env.action_space.sample()
                 #action = 6
             elif deterministic_policy:
-                action, best_ig, best_update = select_best_action(env, env.dt)
+                action, best_ig, best_update = select_best_action_pFOV(env, env.dt)
                 #action = 4
             elif maskable:
                 action_masks = env.action_masks()
@@ -1965,8 +1965,9 @@ def kalmanPlots():
 def main():
     # ****** Test with random policy ******
     n_targets = 5
-    #env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    #n_episodes = 100
+    seeds = [42, 123, 321]
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    n_episodes = 2
 
     #visualize_initial_positions(env)
 
@@ -1987,9 +1988,9 @@ def main():
     visualize_trained_agent(env, model, n_steps=30) """
     
 #def anotherMethod():
-    seeds = [42, 123, 321]
+    
 
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
+    """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
     n_episodes = 1
 
     # ****** Search ******
@@ -2038,10 +2039,10 @@ def main():
         "PPO": ppo_detections,
         "DQN": dqn_detections
     }
-    plot_violin(detection_results, ylabel="Number of Detections")
+    plot_violin(detection_results, ylabel="Number of Detections") """
 
-    """ # ****** Track ******
-    obs = env.reset()
+    # ****** Track ******
+    """ obs = env.reset()
     maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
     maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=n_episodes, deterministic_policy=False, maskable=True)
     print("Illegal action")
@@ -2052,7 +2053,7 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_maskppo], ddof=1))
     print("Reward")
     print(sum(maskppo_rewards)/len(maskppo_rewards))
-    print(np.std([np.mean(arr) for arr in maskppo_rewards], ddof=1))
+    print(np.std([np.mean(arr) for arr in maskppo_rewards], ddof=1)) """
 
     # ****** Deterministic policy ******
     det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
@@ -2067,7 +2068,7 @@ def main():
     print(np.std([np.mean(arr) for arr in det_rewards], ddof=1))
 
     # ****** Random policy ******
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
     random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)

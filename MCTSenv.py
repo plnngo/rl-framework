@@ -7,7 +7,7 @@ from typing import Optional
 from graphviz import Digraph, Source
 
 from MacroEnv import _sync_envs
-from deterministic_tracker import select_best_action
+from deterministic_tracker import select_best_action_pFOV
 
 class MCTSNode:
     def __init__(self, parent=None, macro_action=None, micro_action=None, env=None, done=False):
@@ -133,7 +133,7 @@ class MCTS:
                 micro_track = None
             else:
                 #micro_track = np.random.choice(known_targets)
-                micro_action, best_ig, best_update = select_best_action(env.track_env.env, self.env.track_env.env.dt)
+                micro_action, best_ig, best_update = select_best_action_pFOV(env.track_env.env, self.env.track_env.env.dt)
                 micro_search = None
                 action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
                 next_obs, rewards, done, truncated, info = env.track_env.env.step(action) 
@@ -187,7 +187,7 @@ class MCTS:
                     _sync_envs(env.search_env.env, env.track_env.env)
                     micro_track = None
                 else:
-                    micro_action, best_ig, best_update = select_best_action(env.track_env.env, self.env.track_env.env.dt)
+                    micro_action, best_ig, best_update = select_best_action_pFOV(env.track_env.env, self.env.track_env.env.dt)
                     micro_search = None
                     action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
                     next_obs, reward, done, truncated, info = env.track_env.env.step(action) 
