@@ -1184,7 +1184,7 @@ def compute_state_differences_with_ekf(traj_pred, last_episode_log, last_env, R)
                 x_pred.copy(),
                 P_pred.copy(),
                 R, 
-                MultiTargetEnv.extract_measurement_XY
+                MultiTargetEnv.extract_measurement_bearingRange
             )
 
             # Difference: updated EKF - predicted
@@ -1358,7 +1358,7 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
                         t_obs  = timesteps,         # shape (L,)
                         obs    = tgt_meas,          # shape (p, L)
                         intfcn = integrationFcn,
-                        H_fcn  = MultiTargetEnv.extract_measurement_XY,   # must be callable
+                        H_fcn  = MultiTargetEnv.extract_measurement_bearingRange,   # must be callable
                         inputs = inputs
                     )
         all_tgt_states = all_target_states[tgt_id]
