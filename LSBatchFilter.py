@@ -150,7 +150,7 @@ def batch_estimate_single_target(
         Xref[:, k] = x[:4]
 
         # measurement model
-        Htil, Gk = MultiTargetEnv.extract_measurement(x)
+        Htil, Gk = MultiTargetEnv.extract_measurement_XY(x)
         yk = y_obs[k] - Gk
         resids[:, k] = yk
 
@@ -216,7 +216,7 @@ def residuals_cv(params, t_obs, y_obs, R_sqrt_inv=None):
     thetas = []
     rs = []
     for s in states:
-        H, Gk = MultiTargetEnv.extract_measurement(s)
+        H, Gk = MultiTargetEnv.extract_measurement_XY(s)
         thetas.append(Gk[0])
         rs.append(Gk[1])
     thetas = np.array(thetas)
@@ -251,7 +251,7 @@ def f_ct(x):
 # ------------------------
 # helper: measurement prediction for a state vector (4D px,py,vx,vy)
 def predict_measurement_from_state(x4):
-    H, Gk = MultiTargetEnv.extract_measurement(x4)
+    H, Gk = MultiTargetEnv.extract_measurement_XY(x4)
     return Gk
 
 # ------------------------
@@ -288,7 +288,7 @@ def residuals_ct(params, t_obs, y_obs, R_sqrt_inv=None):
     rs = []
     for s in states:
         # pass only first 4 entries to measurement function
-        H, Gk = MultiTargetEnv.extract_measurement(s[:4])
+        H, Gk = MultiTargetEnv.extract_measurement_XY(s[:4])
         thetas.append(Gk[0])
         rs.append(Gk[1])
     thetas = np.array(thetas)
@@ -396,7 +396,7 @@ def estimate_all_targets_from_tracks(tracks, env, R=None, **batch_kwargs):
         # --- Convert ground-truth states → measurements ---
         y_obs = []
         for x in truth_states:
-            H, Gk = MultiTargetEnv.extract_measurement(x)
+            H, Gk = MultiTargetEnv.extract_measurement_XY(x)
             y_true = Gk
             # Add measurement noise from R
             noise = np.random.multivariate_normal(mean=np.zeros(2), cov=R)
@@ -504,7 +504,7 @@ def generate_truth_states(t_vec, tgt_id, env):
 
     # Store initial propagated truth
     truth_states[0] = x0[:4]
-    H, Gk = MultiTargetEnv.extract_measurement(x0[:4])
+    H, Gk = MultiTargetEnv.extract_measurement_XY(x0[:4])
     measurements[0,:] = Gk
     H_mod.append(H)
 
@@ -525,7 +525,7 @@ def generate_truth_states(t_vec, tgt_id, env):
             )
 
         truth_states[k+1] = x_next
-        H, Gk = MultiTargetEnv.extract_measurement(x_next[:4])
+        H, Gk = MultiTargetEnv.extract_measurement_XY(x_next[:4])
         measurements[k+1,:] = Gk
         H_mod.append(H)
 

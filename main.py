@@ -647,7 +647,7 @@ def visualize_search_pointing_heatmap(env, pointing_history):
     ax.axhline(0, color="gray", linestyle="--", linewidth=1)
     ax.axvline(0, color="gray", linestyle="--", linewidth=1)
 
-    ax.set_title("Agent SEARCH Pointing Over Time")
+    #ax.set_title("Agent Pointing Over Time")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.grid(False)
@@ -695,7 +695,7 @@ def visualize_unknown_target_heatmap(env, unknown_target_history):
     ax.axhline(0, color="gray", linestyle="--", linewidth=1)
     ax.axvline(0, color="gray", linestyle="--", linewidth=1)
 
-    ax.set_title("Unknown Target Positions Over Time")
+    #ax.set_title("Unknown Target Positions Over Time")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.grid(False)
@@ -1184,7 +1184,7 @@ def compute_state_differences_with_ekf(traj_pred, last_episode_log, last_env, R)
                 x_pred.copy(),
                 P_pred.copy(),
                 R, 
-                MultiTargetEnv.extract_measurement
+                MultiTargetEnv.extract_measurement_XY
             )
 
             # Difference: updated EKF - predicted
@@ -1358,7 +1358,7 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
                         t_obs  = timesteps,         # shape (L,)
                         obs    = tgt_meas,          # shape (p, L)
                         intfcn = integrationFcn,
-                        H_fcn  = MultiTargetEnv.extract_measurement,   # must be callable
+                        H_fcn  = MultiTargetEnv.extract_measurement_XY,   # must be callable
                         inputs = inputs
                     )
         all_tgt_states = all_target_states[tgt_id]
