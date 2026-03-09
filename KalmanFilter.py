@@ -34,8 +34,8 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
     """
 
     # Dimensions
-    L = obs.shape[0]
-    p = obs.shape[1]
+    L = 100 #obs.shape[0]
+    p = 2 #obs.shape[1]
     n = Xo_ref.size
 
     # Inputs
@@ -70,41 +70,15 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
     # Kalman filter loop
     for k in range(L):
-        Yk = obs[k,:]
-        """ t = t_obs[k]
-        t_prior = 0.0 if k == 0 else t_obs[k - 1]
-        delta_t = t - t_prior
-
-        Yk = obs[k,:]
-
-        # Save priors
-        Xref_prior = Xref.copy()
-        xhat_prior = xhat.copy()
-        P_prior = P.copy()
-
-        # -------------------------
-        # Step B: Integrate Xref & STM
-        # -------------------------
-        int0 = np.hstack((Xref_prior, phi0_v))
-
-        if t == t_prior:
-            xout = int0
-        else:
-            sol = solve_ivp(
-                fun=lambda tau, y: intfcn(tau, y, inputs),
-                t_span=(t_prior, t),
-                y0=int0,
-                rtol=ode_tol,
-                atol=ode_tol
-            )
-            xout = sol.y[:, -1]
-
-        Xref = xout[:n]
-        phi = xout[n:].reshape((n, n)) """
+        if k in t_obs:
+            t_obs = np.array(t_obs)
+            Yk = obs[np.where(t_obs == k)[0],:].T
+        else: 
+            Yk = np.full(p, np.nan)
         if k > 0:
             Xref, Phi = propagate_state_and_stm(
-                t_obs[k - 1],
-                t_obs[k],
+                k - 1,
+                k,
                 Xref,
                 np.eye(n).reshape(-1),
                 f_dyn,
@@ -134,38 +108,42 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
         # -------------------------
         # Step D: Measurement update
         # -------------------------
-        Hk_til, Gk = H_fcn(Xref)
-        yk = Yk - Gk
+        if k not in t_obs:
+            Xk_mat[:, k] = Xref + xbar
+            P_mat[:, :, k] = Pbar
+        else:
+            Hk_til, Gk = H_fcn(Xref)
+            yk = Yk.flatten() - Gk
 
-        S = Hk_til @ Pbar @ Hk_til.T + Rk
-        Kk = Pbar @ Hk_til.T @ np.linalg.inv(S)
+            S = Hk_til @ Pbar @ Hk_til.T + Rk
+            Kk = Pbar @ Hk_til.T @ np.linalg.inv(S)
 
-        # -------------------------
-        # Step E: State & covariance update
-        # -------------------------
-        xhat = xbar + Kk @ (yk - Hk_til @ xbar)
+            # -------------------------
+            # Step E: State & covariance update
+            # -------------------------
+            xhat = xbar + Kk @ (yk - Hk_til @ xbar)
 
-        I = np.eye(n)
-        P = (I - Kk @ Hk_til) @ Pbar @ (I - Kk @ Hk_til).T + Kk @ Rk @ Kk.T
+            I = np.eye(n)
+            P = (I - Kk @ Hk_til) @ Pbar @ (I - Kk @ Hk_til).T + Kk @ Rk @ Kk.T
 
-        # Post-fit residuals
-        Xk = Xref + xhat
-        resids[:,k] = yk - Hk_til @ xhat
+            # Post-fit residuals
+            Xk = Xref + xhat
+            resids[:,k] = yk - Hk_til @ xhat
 
-        # Save outputs
-        Xk_mat[:, k] = Xk
-        P_mat[:, :, k] = P
+            # Save outputs
+            Xk_mat[:, k] = Xk
+            P_mat[:, :, k] = P
 
-        # EKF
-        """ if k != 0:
-            if np.linalg.norm(xhat) < converged and prev_norm < np.linalg.norm(xhat) and count>5:
-                #print(np.linalg.norm(xhat))
-                Xref = Xk.copy()
-                xhat = np.zeros(n)
-                count = 0 """
+            # EKF
+            """ if k != 0:
+                if np.linalg.norm(xhat) < converged and prev_norm < np.linalg.norm(xhat) and count>5:
+                    #print(np.linalg.norm(xhat))
+                    Xref = Xk.copy()
+                    xhat = np.zeros(n)
+                    count = 0 """
 
-        prev_norm = np.linalg.norm(xhat)
-        count += 1
+            prev_norm = np.linalg.norm(xhat)
+            count += 1
 
     return Xk_mat, P_mat, resids
 

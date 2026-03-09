@@ -6,7 +6,7 @@ from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 import KalmanFilter
 from LSBatchFilter import Fx_cv_cont, batch_estimate_single_target, estimate_all_targets_from_tracks, f_cv_cont, generate_truth_states, plot_errors_and_sigmas, process_estimates, f_ct_linear, Fx_ct_linear
-from deterministic_tracker import select_best_action_pFOV
+from deterministic_tracker import select_best_action_IG, select_best_action_pFOV
 from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
 import numpy as np
@@ -554,6 +554,8 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                 #action = 6
             elif deterministic_policy:
                 action, best_ig, best_update = select_best_action_pFOV(env, env.dt)
+            elif deterministic_policy_alternative:
+                action, best_ig, best_update = select_best_action_IG(env, env.dt)
                 #action = 4
             elif maskable:
                 action_masks = env.action_masks()
@@ -1239,8 +1241,9 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
         #print("Plot errors for target " + str(tgt_id))
 
         # --- Extract data from track ---
-        #timesteps = [obs["t"] for obs in track]
-        timesteps = np.arange(len(all_meas[tgt_id]))
+        target = next(iter(tracks))
+        timesteps = [obs["t"] for obs in tracks[target]]
+        #timesteps = np.arange(len(all_meas[tgt_id]))
         #if not timesteps and tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
         if tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
             continue
@@ -1361,19 +1364,19 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
                         H_fcn  = MultiTargetEnv.extract_measurement_bearingRange,   # must be callable
                         inputs = inputs
                     )
-        all_tgt_states = all_target_states[tgt_id]
+        """ all_tgt_states = all_target_states[tgt_id]
         tgt_states_with_velocity = all_tgt_states[timesteps, :]
         tgt_states = tgt_states_with_velocity.T[:4, :]
         error = tgt_states - Xk
         #errors_all_targets.append(error)
-        """ pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
+        pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
         three_sigma_x  = 3.0 * np.sqrt(Pk[0, 0, :])
         three_sigma_y  = 3.0 * np.sqrt(Pk[1, 1, :])
         three_sigma_vx = 3.0 * np.sqrt(Pk[2, 2, :])
         three_sigma_vy = 3.0 * np.sqrt(Pk[3, 3, :])
-        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:]) """
+        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:])
 
-        t = timesteps
+        t = timesteps """
 
         errors_all_targets.append(Xk)
         total_trace_cov.append(Pk)
@@ -1561,13 +1564,13 @@ def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
     obs = env.reset()
-    n_episodes = 1
+    n_episodes = 2
+    episode_efficiencies_pfov = []
+    episode_efficiencies_ig = []
     sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
     sigma_r = 0.1        # 10 cm range noise
 
     R = np.diag([sigma_theta**2, sigma_r**2])
-    Q = np.eye(2) * 1e-14
-    #Q = np.eye(2) * 0
 
     # Generate truth data
     timesteps = np.arange(env.max_steps)
@@ -1623,25 +1626,46 @@ def efficiencyPlot():
     algorithms = ["Heuristic", "MaskPPO", "PPO", "DQN", "Random"]
     meanEfficiencies = {alg: [] for alg in algorithms}
     for i in range(n_episodes):
-        # Heuristic track
-        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True)
+
+        # Heuristic track pFOV
+        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
+            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True)
+
+        tracks = extract_tracks_from_log(last_episode_log)
+
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R)
+
+        efficiency_by_targetKLpFOV, t_by_target = computeEff(klCov, tracks, estimates)
+
+        # ---- Average across targets ----
+        target_eff_matrix = np.array(list(efficiency_by_targetKLpFOV.values()))
+        mean_eff_targets = np.mean(target_eff_matrix, axis=0)
+        episode_efficiencies_pfov.append(mean_eff_targets)
+
+        env = last_env
+    
+        #plot_efficiency(efficiency_by_target, t_by_target)
+        """ plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
+        plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target) """
+
+        env = last_env
+
+        # Heuristic track IG
+        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
         tracks = extract_tracks_from_log(last_episode_log)
         ls_cov_dict = dict(bestCov)
 
         klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R) 
-        efficiency_by_targetKLHeuristic, t_by_target = computeEff(klCov, tracks, estimates)
-        eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
+        efficiency_by_targetKLig, t_by_target = computeEff(klCov, tracks, estimates)
+        target_eff_matrix = np.array(list(efficiency_by_targetKLig.values()))
+        mean_eff_targets = np.mean(target_eff_matrix, axis=0)
 
-        """ if meanEfficiencies["Heuristic"] is None:
-            meanEfficiencies["Heuristic"] = eff_sum.copy()
-        else:
-            meanEfficiencies["Heuristic"] += (eff_sum - meanEfficiencies["Heuristic"]) / (i + 1) """
+        episode_efficiencies_ig.append(mean_eff_targets)
+        #eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
     
         #plot_efficiency(efficiency_by_target, t_by_target)
-        plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
-        plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target)
-
-        env = last_env
+        """ plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
+        plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target) """
         """ # ****** Maskable PPO policy ******
         maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
         maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=1, deterministic_policy=False, maskable=True)
@@ -1697,6 +1721,32 @@ def efficiencyPlot():
             meanEfficiencies["Random"] += (eff_sum - meanEfficiencies["Random"]) / (i + 1)
             
     plot_mean_efficiencies(meanEfficiencies) """
+    episode_efficiencies_pfov = np.array(episode_efficiencies_pfov)
+    episode_efficiencies_ig = np.array(episode_efficiencies_ig)
+
+    mean_pfov = np.mean(episode_efficiencies_pfov, axis=0)
+    std_pfov = np.std(episode_efficiencies_pfov, axis=0)
+
+    mean_ig = np.mean(episode_efficiencies_ig, axis=0)
+    std_ig = np.std(episode_efficiencies_ig, axis=0)
+
+    t = list(t_by_target.values())[0]
+
+    plt.figure()
+
+    plt.plot(t, mean_pfov, label="Heuristic pFOV")
+    plt.fill_between(t, mean_pfov - std_pfov, mean_pfov + std_pfov, alpha=0.3)
+
+    plt.plot(t, mean_ig, label="Heuristic IG")
+    plt.fill_between(t, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3)
+
+    plt.xlabel("Time")
+    plt.ylabel("Efficiency")
+    plt.title("Average Efficiency over 100 Episodes")
+    plt.legend()
+    plt.grid()
+
+    plt.show()
 
 def plot_mean_efficiencies(meanEfficiencies):
     """
@@ -1813,12 +1863,12 @@ def computeEff(klCov, tracks, ls_cov_dict):
         three_sigma_pos = 3.0 * np.sqrt(P_xx + P_yy)
         detP = np.det """
 
-        plt.plot(propPLS)
+        """ plt.plot(propPLS)
         plt.xlabel("Timestep")
         plt.ylabel("Determinant")
         plt.title("Covariance")
         plt.grid(True)
-        plt.show()
+        plt.show() """
     return efficiency_by_targetKL, t_by_target
 
 def plot_efficiency(efficiency_by_target, t_by_target):
@@ -2055,8 +2105,21 @@ def main():
     print(sum(maskppo_rewards)/len(maskppo_rewards))
     print(np.std([np.mean(arr) for arr in maskppo_rewards], ddof=1)) """
 
-    # ****** Deterministic policy ******
-    det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    # ****** Deterministic policy pFOV ******
+    det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True, deterministic_policy_alternative=False)
+    print("Illegal action")
+    print(sum(illegal_actions_det)/len(illegal_actions_det))
+    print(np.std([np.mean(arr) for arr in illegal_actions_det], ddof=1))
+    print("Lost targets")
+    print(sum(exceedFOV_det)/len(exceedFOV_det))
+    print(np.std([np.mean(arr) for arr in exceedFOV_det], ddof=1))
+    print("Reward")
+    print(sum(det_rewards)/len(det_rewards))
+    print(np.std([np.mean(arr) for arr in det_rewards], ddof=1))
+
+    # ****** Deterministic policy IG******
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
     print("Illegal action")
     print(sum(illegal_actions_det)/len(illegal_actions_det))
     print(np.std([np.mean(arr) for arr in illegal_actions_det], ddof=1))
@@ -2174,8 +2237,8 @@ def main():
  """
  
 if __name__ == "__main__":
-    main()
+    #main()
     #kalmanPlots()
     #rmsePlot()
-    #efficiencyPlot()
+    efficiencyPlot()
     #efficiencyOtherPlot()
