@@ -294,7 +294,7 @@ class MultiTargetEnv(gym.Env):
 
             # compute measurement related to action
             if target_id and idx == micro:
-                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_bearingRange)
+                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
                 iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 probSimple = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
                 prob = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
