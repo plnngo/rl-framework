@@ -4,17 +4,15 @@ from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 def select_best_action_pFOV(env, dt=None):
     """
-    Returns the target ID that yields the highest information gain (KL divergence)
+    Returns the target ID that yields the highest probability to be inside FOV after measurement update
     when selecting it as the next action.
 
     Parameters
     ----------
     env : object
         Environment-like object containing targets, models, parameters, rng, etc.
-    R : ndarray
-        Measurement noise covariance used in the EKF update.
     dt : float or None
-        Optional override of env.dt.
+        Time step.
 
     Returns
     -------
@@ -59,21 +57,14 @@ def select_best_action_pFOV(env, dt=None):
         idx = tgt['id']
         x_pred, P_pred = propagated[idx]
         x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R, obsFunc)
-
-        ig = MultiTargetEnv.compute_kl_divergence(x_pred, P_pred, x_upd, P_upd)
-
+       
         # Swap out this target's predicted prob for its updated prob
         prob_this_pred = compute_fov_prob_single(env.fov_size, x_pred, P_pred)
         prob_this_upd  = compute_fov_prob_single(env.fov_size, x_upd,  P_upd)
         prob = total_pred_prob - prob_this_pred + prob_this_upd
 
         # Keep the best
-        """ if ig > best_ig:
-            best_ig = ig
-            best_target_id = idx
-            best_update = {"x": x_upd, "P": P_upd} """
         if prob > highest_prob:
-            best_ig = ig
             highest_prob = prob
             best_target_id = idx
             best_update = {"x": x_upd, "P": P_upd}
@@ -90,10 +81,8 @@ def select_best_action_IG(env, dt=None):
     ----------
     env : object
         Environment-like object containing targets, models, parameters, rng, etc.
-    R : ndarray
-        Measurement noise covariance used in the EKF update.
     dt : float or None
-        Optional override of env.dt.
+        Time step.
 
     Returns
     -------
@@ -118,7 +107,7 @@ def select_best_action_IG(env, dt=None):
         model = env.motion_model[idx]
         param = env.motion_params[idx]
 
-        # 1. Propagate the target forward
+        # Propagate the target forward
         x_pred, P_pred = MultiTargetEnv.propagate_target_2D(
             tgt['x'], tgt['P'], tgt.get('Q', env.Q0),
             dt=dt,
@@ -127,10 +116,10 @@ def select_best_action_IG(env, dt=None):
             motion_param=param
         )
 
-        # 2. Perform the hypothetical EKF update (sensing action = choose idx)
-        x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R, MultiTargetEnv.extract_measurement_bearingRange)
+        # Perform the hypothetical EKF update (sensing action = choose idx)
+        x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R, obsFunc)
 
-        # 3. Compute information gain (KL divergence)/ complementary probability
+        # Compute information gain (KL divergence)/ complementary probability
         ig = MultiTargetEnv.compute_kl_divergence(x_pred, P_pred, x_upd, P_upd)
 
         if ig > best_ig:
