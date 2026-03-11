@@ -53,23 +53,20 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
     resids = np.zeros((p, L))
     Xk_mat = np.zeros((n, L))
     P_mat = np.zeros((n, n, L))
-    #Pbk_mat = np.zeros((n, n, L))
 
     # STM initialization
     phi0 = np.eye(n)
-    phi0_v = phi0.reshape(n * n)
 
     # ODE tolerances
-    ode_tol = 1e-12
     rtol = 1e-6
     atol = 1e-8
 
-    prev_norm = 0
-    converged = 0.05
     count = 0
+    t_prev = 0
 
     # Kalman filter loop
     for k in range(L):
+        tk = t_obs[k]
         Yk = obs[k,:]
         """ t = t_obs[k]
         t_prior = 0.0 if k == 0 else t_obs[k - 1]
@@ -101,21 +98,24 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
 
         Xref = xout[:n]
         phi = xout[n:].reshape((n, n)) """
-        if k > 0:
-            Xref, Phi = propagate_state_and_stm(
-                t_obs[k - 1],
-                t_obs[k],
-                Xref,
-                np.eye(n).reshape(-1),
-                f_dyn,
-                Fx_dyn,
-                n,
-                inputs["omega"],
-                rtol,
-                atol
-            )
+        if "omega" in inputs:
+            omega = inputs["omega"]
         else:
-            Phi = np.eye(n)
+            omega = 0
+        Xref, Phi = propagate_state_and_stm(
+            t0=t_prev,
+            t1=tk,
+            x0=Xref,
+            Phi0_vec=phi0.reshape(-1),
+            f_dyn=f_dyn,
+            Fx_dyn=Fx_dyn,
+            n=n,
+            omega=omega,
+            rtol=rtol,
+            atol=atol
+        )
+        """ else:
+            Phi = np.eye(n) """
 
         # -------------------------
         # Step C: Time update
@@ -164,8 +164,9 @@ def ekf(Xo_ref, t_obs, obs, intfcn, H_fcn, inputs):
                 xhat = np.zeros(n)
                 count = 0 """
 
-        prev_norm = np.linalg.norm(xhat)
+
         count += 1
+        t_prev = tk
 
     return Xk_mat, P_mat, resids
 

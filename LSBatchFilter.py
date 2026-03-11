@@ -93,6 +93,7 @@ def batch_estimate_single_target(
     f_ct_cont=f_ct_linear, Fx_ct_cont=Fx_ct_linear,
     rtol=1e-6,
     atol=1e-8,
+    obsFunc=None
 ):
     """
     Batch estimator, with CV/CT selection.
@@ -150,7 +151,7 @@ def batch_estimate_single_target(
         Xref[:, k] = x[:4]
 
         # measurement model
-        Htil, Gk = MultiTargetEnv.extract_measurement(x)
+        Htil, Gk = obsFunc(x)
         yk = y_obs[k] - Gk
         resids[:, k] = yk
 
@@ -216,7 +217,7 @@ def residuals_cv(params, t_obs, y_obs, R_sqrt_inv=None):
     thetas = []
     rs = []
     for s in states:
-        H, Gk = MultiTargetEnv.extract_measurement(s)
+        H, Gk = MultiTargetEnv.extract_measurement_bearingRange(s)
         thetas.append(Gk[0])
         rs.append(Gk[1])
     thetas = np.array(thetas)
@@ -251,7 +252,7 @@ def f_ct(x):
 # ------------------------
 # helper: measurement prediction for a state vector (4D px,py,vx,vy)
 def predict_measurement_from_state(x4):
-    H, Gk = MultiTargetEnv.extract_measurement(x4)
+    H, Gk = MultiTargetEnv.extract_measurement_bearingRange(x4)
     return Gk
 
 # ------------------------
@@ -288,7 +289,7 @@ def residuals_ct(params, t_obs, y_obs, R_sqrt_inv=None):
     rs = []
     for s in states:
         # pass only first 4 entries to measurement function
-        H, Gk = MultiTargetEnv.extract_measurement(s[:4])
+        H, Gk = MultiTargetEnv.extract_measurement_bearingRange(s[:4])
         thetas.append(Gk[0])
         rs.append(Gk[1])
     thetas = np.array(thetas)
@@ -396,7 +397,7 @@ def estimate_all_targets_from_tracks(tracks, env, R=None, **batch_kwargs):
         # --- Convert ground-truth states → measurements ---
         y_obs = []
         for x in truth_states:
-            H, Gk = MultiTargetEnv.extract_measurement(x)
+            H, Gk = MultiTargetEnv.extract_measurement_bearingRange(x)
             y_true = Gk
             # Add measurement noise from R
             noise = np.random.multivariate_normal(mean=np.zeros(2), cov=R)
@@ -458,23 +459,18 @@ def estimate_all_targets_from_tracks(tracks, env, R=None, **batch_kwargs):
 
     return estimates
 
-def generate_truth_states(t_vec, tgt_id, env):
+def generate_truth_states(t_vec, tgt_id, env, H_fcn):
     """
-    Generate continuous-time truth trajectory for a given target.
-    Returns truth_states with shape (T, n).
+    Generate truth trajectory for a given target and measurement values.
+    Returns truth_states with shape (T, n), measurements and observation matrix.
     """
 
     # State dimension
     n = env.targets[0]["x"].shape[0]
-    """ if env.motion_model[tgt_id] == "T":
-        #n = 5
-        n=4
-    else:
-        n = 4 """
 
     # Allocate output
     truth_states = np.zeros((len(t_vec), n))
-    measurements = np.zeros((len(t_vec), 2))        # 2 <- theta and r
+    measurements = np.zeros((len(t_vec), 2))        
     H_mod = []
 
     # Initial state at t=0
@@ -482,9 +478,6 @@ def generate_truth_states(t_vec, tgt_id, env):
         x0 = env.unknown_targets[tgt_id - env.init_n_targets]["x"].copy()
     else:
         x0 = env.targets[tgt_id]["x"].copy()
-
-    """ if env.motion_model[tgt_id] == "T":     # CT model has ω (turn rate)
-        x0 = np.append(x0, env.motion_params[tgt_id]) """
 
     Phi0 = np.eye(n).reshape(-1)
 
@@ -504,7 +497,7 @@ def generate_truth_states(t_vec, tgt_id, env):
 
     # Store initial propagated truth
     truth_states[0] = x0[:4]
-    H, Gk = MultiTargetEnv.extract_measurement(x0[:4])
+    H, Gk = H_fcn(x0[:4])
     measurements[0,:] = Gk
     H_mod.append(H)
 
@@ -525,7 +518,7 @@ def generate_truth_states(t_vec, tgt_id, env):
             )
 
         truth_states[k+1] = x_next
-        H, Gk = MultiTargetEnv.extract_measurement(x_next[:4])
+        H, Gk = H_fcn(x_next[:4])
         measurements[k+1,:] = Gk
         H_mod.append(H)
 

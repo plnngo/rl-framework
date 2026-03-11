@@ -5,7 +5,7 @@ import copy
 
 from sb3_contrib import MaskablePPO
 
-from deterministic_tracker import select_best_action
+from deterministic_tracker import select_best_action_pFOV
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 def unwrap_env(env):
@@ -238,7 +238,7 @@ class MacroEnv(gym.Env):
         else:
             obs = real_track_env.obs
             if self.heuristicTracker:
-                micro_action, best_ig, best_update = select_best_action(real_track_env, real_track_env.dt)
+                micro_action, best_ig, best_update = select_best_action_pFOV(real_track_env, real_track_env.dt)
             else:
                 if isinstance(self.track_agent, MaskablePPO):
                     action_masks = real_track_env.action_masks()

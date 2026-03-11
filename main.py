@@ -1,12 +1,13 @@
 import copy
 import random
+import time
 from matplotlib.colors import to_rgba
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 import KalmanFilter
-from LSBatchFilter import Fx_cv_cont, batch_estimate_single_target, estimate_all_targets_from_tracks, f_cv_cont, generate_truth_states, plot_errors_and_sigmas, process_estimates, f_ct_linear, Fx_ct_linear
-from deterministic_tracker import select_best_action
+from LSBatchFilter import Fx_cv_cont, batch_estimate_single_target, f_cv_cont, generate_truth_states, plot_errors_and_sigmas, process_estimates, f_ct_linear, Fx_ct_linear
+from deterministic_tracker import select_best_action_IG, select_best_action_pFOV
 from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
 import numpy as np
@@ -434,13 +435,6 @@ def extract_target_state_cov(target_idx, env):
     P : np.ndarray
         Covariance matrix of shape (d_state, d_state).
     """
-    """ per = env.obs_dim_per_target
-    d = env.d_state
-    start = int(target_idx * per)
-
-    # Slice corresponding to this target
-    target_slice = obs[start:start + per] """
-
     x = None
     P = None
     # Extract state vector (first d_state elements)
@@ -449,19 +443,6 @@ def extract_target_state_cov(target_idx, env):
             x = tgt["x"]
             P = tgt["P"]
             break
-
-    """ x = env.targets     target_slice[:d].astype(float)
-
-    # Extract packed Cholesky (next cholesky_size elements)
-    ch_pack = target_slice[d:d + env.cholesky_size].astype(float)
-
-    # Handle degenerate or uninitialized covariance
-    if np.allclose(ch_pack, 0.0) or np.any(np.isnan(ch_pack)):
-        P = env.P0.copy()
-    else:
-        L = _unpack_cholesky(ch_pack, d)
-        P = L @ L.T
-        P = 0.5 * (P + P.T)  # ensure symmetry """
 
     return x, P
 
@@ -527,7 +508,7 @@ def analyse_tracking_task(target_idx, env, confidence=0.95):
 
     return full_major > float(env.fov_size), x, P
 
-def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, deterministic_policy=False, seed=None, maskable=False):
+def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative = False, seed=None, maskable=False):
     rewards = []
     exceedFOV = []
     illegal_actions = []
@@ -553,7 +534,9 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
                 action = env.action_space.sample()
                 #action = 6
             elif deterministic_policy:
-                action, best_ig, best_update = select_best_action(env, env.dt)
+                action, best_ig, best_update = select_best_action_pFOV(env, env.dt)
+            elif deterministic_policy_alternative:
+                action, best_ig, best_update = select_best_action_IG(env, env.dt)
                 #action = 4
             elif maskable:
                 action_masks = env.action_masks()
@@ -575,8 +558,6 @@ def evaluate_agent_track(env, model=None, n_episodes=100, random_policy=False, d
             if ep == n_episodes - 1:
                 for tgt in env.targets:
                     exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
-                    """ if exceed and tgt not in exceed_target:
-                        exceed_target.append(tgt) """
 
                     # if this is the last episode, store everything
                     if not info["action_mask"]["micro_track"][np.asarray(action).item()]:
@@ -647,7 +628,7 @@ def visualize_search_pointing_heatmap(env, pointing_history):
     ax.axhline(0, color="gray", linestyle="--", linewidth=1)
     ax.axvline(0, color="gray", linestyle="--", linewidth=1)
 
-    ax.set_title("Agent SEARCH Pointing Over Time")
+    #ax.set_title("Agent Pointing Over Time")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.grid(False)
@@ -695,7 +676,7 @@ def visualize_unknown_target_heatmap(env, unknown_target_history):
     ax.axhline(0, color="gray", linestyle="--", linewidth=1)
     ax.axvline(0, color="gray", linestyle="--", linewidth=1)
 
-    ax.set_title("Unknown Target Positions Over Time")
+    #ax.set_title("Unknown Target Positions Over Time")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.grid(False)
@@ -1184,7 +1165,7 @@ def compute_state_differences_with_ekf(traj_pred, last_episode_log, last_env, R)
                 x_pred.copy(),
                 P_pred.copy(),
                 R, 
-                MultiTargetEnv.extract_measurement
+                MultiTargetEnv.extract_measurement_bearingRange
             )
 
             # Difference: updated EKF - predicted
@@ -1196,6 +1177,33 @@ def compute_state_differences_with_ekf(traj_pred, last_episode_log, last_env, R)
                 compared[t][tgt_id] = x_upd - x_log
 
     return diffs, compared
+
+def constant_obs_all_targets(estimates=None):
+
+    tracks = {tid: [] for tid in estimates.keys()}
+
+    for target_id, entry in estimates.items():
+
+        if not isinstance(entry, dict):
+            continue
+
+        Xest = entry.get("Xest")
+        P_mat = entry.get("P_mat")
+
+        if Xest is None or P_mat is None:
+            continue
+
+        L = Xest.shape[1]
+
+        for k in range(L):
+
+            tracks[target_id].append({
+                "t": k,
+                "state": Xest[:, k],
+                "cov": P_mat[:, :, k]
+            })
+
+    return tracks
 
 def extract_tracks_from_log(last_episode_log, n_targets=5):
     """
@@ -1231,7 +1239,7 @@ def extract_tracks_from_log(last_episode_log, n_targets=5):
 
     return tracks
 
-def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
+def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc):
     errors_all_targets = []
     total_trace_cov = []
     #for tgt_id, track in tracks.items():
@@ -1239,8 +1247,8 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
         #print("Plot errors for target " + str(tgt_id))
 
         # --- Extract data from track ---
-        #timesteps = [obs["t"] for obs in track]
-        timesteps = np.arange(len(all_meas[tgt_id]))
+        timesteps = [obs["t"] for obs in tracks[tgt_id]]
+        #timesteps = np.arange(len(all_meas[tgt_id]))
         #if not timesteps and tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
         if tgt_id >= last_env.init_n_targets:   # if not detected and initially unknown
             continue
@@ -1259,7 +1267,7 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
                                 #"Q": np.eye(2) * 1e-27,
                                 "Q": np.eye(2) * 0.,
                                 "Po": tgt['P'],
-                                "omega": omega,
+                                #"omega": omega,
                                 "f_dyn": f_dyn,
                                 "Fx_dyn": Fx_dyn
                             }
@@ -1358,22 +1366,22 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R):
                         t_obs  = timesteps,         # shape (L,)
                         obs    = tgt_meas,          # shape (p, L)
                         intfcn = integrationFcn,
-                        H_fcn  = MultiTargetEnv.extract_measurement,   # must be callable
+                        H_fcn  = obsFunc,   
                         inputs = inputs
                     )
-        all_tgt_states = all_target_states[tgt_id]
+        """ all_tgt_states = all_target_states[tgt_id]
         tgt_states_with_velocity = all_tgt_states[timesteps, :]
         tgt_states = tgt_states_with_velocity.T[:4, :]
         error = tgt_states - Xk
         #errors_all_targets.append(error)
-        """ pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
+        pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
         three_sigma_x  = 3.0 * np.sqrt(Pk[0, 0, :])
         three_sigma_y  = 3.0 * np.sqrt(Pk[1, 1, :])
         three_sigma_vx = 3.0 * np.sqrt(Pk[2, 2, :])
         three_sigma_vy = 3.0 * np.sqrt(Pk[3, 3, :])
-        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:]) """
+        three_sigma_pos = 3.0 * np.sqrt(Pk[0,0,:] + Pk[1,1,:])
 
-        t = timesteps
+        t = timesteps """
 
         errors_all_targets.append(Xk)
         total_trace_cov.append(Pk)
@@ -1554,94 +1562,125 @@ def efficiencyOtherPlot():
     plt.grid(True)
     plt.show()
 
+def repositionEfficiency(values, time):
+    max_time = 100
+    out = np.full(max_time, np.nan)
+    for k in range(len(out)):
 
+        for tid in time:
+
+            t_array = time[tid]
+
+            # check if timestep exists for this target
+            idx = np.where(t_array == k)[0]
+
+            if len(idx) > 0:
+                i = idx[0]
+
+                eff_val = values[tid][i]
+
+                if np.isnan(out[k]):
+                    out[k] = eff_val
+                else:
+                    out[k] += eff_val
+    return out
 
 
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    obs = env.reset()
-    n_episodes = 1
+    n_episodes = 10
+    episode_efficiencies_pfov = []
+    episode_efficiencies_ig = []
     sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
     sigma_r = 0.1        # 10 cm range noise
+    sigma = sigma_r
 
     R = np.diag([sigma_theta**2, sigma_r**2])
-    Q = np.eye(2) * 1e-14
-    #Q = np.eye(2) * 0
 
-    # Generate truth data
-    timesteps = np.arange(env.max_steps)
-    all_target_states = {}
-    all_meas = {}
-    for tgt_id in env.targets:
-        tid = tgt_id["id"]
-        truth_states, measurements, _ = generate_truth_states(timesteps, tid, env)
-        all_target_states[tid] = truth_states
-        measurements[:, 0] += np.random.normal(0, sigma_theta, size=len(measurements))
-        measurements[:, 1] += np.random.normal(0, sigma_r, size=len(measurements))
-        all_meas[tid] = measurements
-    
-    # Extract best cov guess
-    bestCov = []
-    estimates = {}
-    for tgt in env.targets:
-        if env.motion_model[tgt["id"]] == "T":
-            chosen_model = "CT"
-            """ state = np.append(tgt["x"], env.motion_params[tgt["id"]])
-            cov = np.zeros((5, 5))
-            cov[:4, :4] = tgt["P"]
-            cov[4, 4] = 0.1 """
-
-        else: 
-            chosen_model = "CV"
-        state = tgt["x"]
-        cov = tgt["P"]
-
-        out = batch_estimate_single_target(
-                timesteps,
-                all_meas[tgt["id"]],
-                state,
-                cov,
-                R,
-                model=chosen_model,
-                omega=env.motion_params[tgt["id"]]
-        )
-        bestCov.append((tgt["id"], out["P0_post"]))
-        estimates[tgt["id"]] = out
-
-    truth_by_tgt, est_by_tgt, cov_by_tgt, errors_by_tgt, sigma_by_tgt, t_by_tgt = \
-        process_estimates(timesteps, estimates, env)
-    
-    for i in range(env.n_targets):
-        
-        """ plot_errors_and_sigmas(
-            errors_by_tgt[i],
-            sigma_by_tgt[i],
-            t=t_by_tgt[i],          
-            target_id=i
-        ) """
     algorithms = ["Heuristic", "MaskPPO", "PPO", "DQN", "Random"]
-    meanEfficiencies = {alg: [] for alg in algorithms}
+    #meanEfficiencies = {alg: [] for alg in algorithms}
+    # Before your episode loop, initialize timing lists
+    evaluate_times_pfov = []
+    evaluate_times_ig = []
     for i in range(n_episodes):
-        # Heuristic track
-        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True)
+
+        # Generate truth data
+        timesteps = np.arange(env.max_steps)
+        all_target_states = {}
+        all_meas = {}
+        obsFunc = MultiTargetEnv.extract_measurement_XY
+        for tgt_id in env.targets:
+            tid = tgt_id["id"]
+            truth_states, measurements, _ = generate_truth_states(timesteps, tid, env, obsFunc)
+            all_target_states[tid] = truth_states
+            measurements[:, 0] += np.random.normal(0, sigma, size=len(measurements))
+            measurements[:, 1] += np.random.normal(0, sigma, size=len(measurements))
+            all_meas[tid] = measurements
+        
+        # Extract best cov guess
+        bestCov = []
+        estimates = {}
+        for tgt in env.targets:
+            if env.motion_model[tgt["id"]] == "T":
+                chosen_model = "CT"
+
+            else: 
+                chosen_model = "CV"
+            state = tgt["x"]
+            cov = tgt["P"]
+
+            out = batch_estimate_single_target(
+                    timesteps,
+                    all_meas[tgt["id"]],
+                    state,
+                    cov,
+                    R,
+                    model=chosen_model,
+                    omega=env.motion_params[tgt["id"]],
+                    obsFunc=obsFunc
+            )
+            bestCov.append((tgt["id"], out["P0_post"]))
+            estimates[tgt["id"]] = out
+
+        # Heuristic track pFOV
+        start = time.perf_counter()
+        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
+            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True)
+        evaluate_times_pfov.append(time.perf_counter() - start)
+
+        #tracks = constant_obs_all_targets(estimates=estimates)
         tracks = extract_tracks_from_log(last_episode_log)
-        ls_cov_dict = dict(bestCov)
 
-        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R) 
-        efficiency_by_targetKLHeuristic, t_by_target = computeEff(klCov, tracks, estimates)
-        eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
 
-        """ if meanEfficiencies["Heuristic"] is None:
-            meanEfficiencies["Heuristic"] = eff_sum.copy()
-        else:
-            meanEfficiencies["Heuristic"] += (eff_sum - meanEfficiencies["Heuristic"]) / (i + 1) """
-    
-        #plot_efficiency(efficiency_by_target, t_by_target)
-        plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
-        plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target)
+        efficiency_by_targetKLpFOV, t_by_target = computeEff(klCov, tracks, estimates)
+
+        # ---- Average across targets ----
+        mean_eff_targets = repositionEfficiency(efficiency_by_targetKLpFOV, t_by_target)
+        episode_efficiencies_pfov.append(mean_eff_targets)
 
         env = last_env
+    
+        #plot_efficiency(efficiency_by_target, t_by_target)
+
+        # Heuristic track IG
+        start = time.perf_counter()
+        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
+        evaluate_times_ig.append(time.perf_counter() - start)
+        tracks = extract_tracks_from_log(last_episode_log)
+
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc) 
+        efficiency_by_targetKLig, t_by_target = computeEff(klCov, tracks, estimates)
+        mean_eff_targets = repositionEfficiency(efficiency_by_targetKLig, t_by_target)
+        episode_efficiencies_ig.append(mean_eff_targets)
+
+        env.reset()
+        #eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
+    
+        #plot_efficiency(efficiency_by_target, t_by_target)
+        """ plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
+        plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target) """
         """ # ****** Maskable PPO policy ******
         maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
         maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=1, deterministic_policy=False, maskable=True)
@@ -1697,6 +1736,40 @@ def efficiencyPlot():
             meanEfficiencies["Random"] += (eff_sum - meanEfficiencies["Random"]) / (i + 1)
             
     plot_mean_efficiencies(meanEfficiencies) """
+    episode_efficiencies_pfov = np.array(episode_efficiencies_pfov)
+    episode_efficiencies_ig = np.array(episode_efficiencies_ig)
+
+    mean_pfov = np.mean(episode_efficiencies_pfov, axis=0)
+    std_pfov = np.std(episode_efficiencies_pfov, axis=0)
+
+    mean_ig = np.mean(episode_efficiencies_ig, axis=0)
+    std_ig = np.std(episode_efficiencies_ig, axis=0)
+
+    # Time statistics
+    mean_time_pfov = np.mean(evaluate_times_pfov)
+    std_time_pfov  = np.std(evaluate_times_pfov)
+
+    mean_time_ig   = np.mean(evaluate_times_ig)
+    std_time_ig    = np.std(evaluate_times_ig)
+
+    print(f"evaluate_agent_track (pFOV) — mean: {mean_time_pfov:.4f}s, std: {std_time_pfov:.4f}s")
+    print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s")
+
+    plt.figure()
+
+    plt.plot(timesteps, mean_pfov, label="Heuristic pFOV")
+    plt.fill_between(timesteps, mean_pfov - std_pfov, mean_pfov + std_pfov, alpha=0.3)
+
+    plt.plot(timesteps, mean_ig, label="Heuristic IG")
+    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3)
+
+    plt.xlabel("Time")
+    plt.ylabel("Efficiency")
+    plt.title("Average Efficiency over 100 Episodes")
+    plt.legend()
+    plt.grid()
+
+    plt.show()
 
 def plot_mean_efficiencies(meanEfficiencies):
     """
@@ -1738,8 +1811,8 @@ def computeEff(klCov, tracks, ls_cov_dict):
     # ODE tolerances
     ode_tol = 1e-12
     for tgt_id, track in tracks.items():
-        #tvec = [obs["t"] for obs in track]
-        tvec = np.arange(100)
+        tvec = [obs["t"] for obs in track]
+        #tvec = np.arange(100)
         #covEst = [obs["cov"] for obs in track]
         covEstKL = klCov[tgt_id]
 
@@ -1769,13 +1842,13 @@ def computeEff(klCov, tracks, ls_cov_dict):
         phi0_v = np.eye(n).reshape(n * n)
         int0 = np.hstack((targets["Xref"][:4,0], phi0_v))
         for k in range(len(tvec)):
-            if k == 0:
+            if tvec[k] == 0:
                 P_prop = P0
                 Xref = targets["Xref"][:,0].copy()
             else:
                 sol = solve_ivp(
                     fun=lambda tau, y: integrationFcn(tau, y, inputs),
-                    t_span=(tvec[0], tvec[k]),  # always from t0
+                    t_span=(0, tvec[k]),  # always from t0
                     y0=int0,                    # always from initial state + identity STM
                     rtol=ode_tol,
                     atol=ode_tol
@@ -1813,12 +1886,12 @@ def computeEff(klCov, tracks, ls_cov_dict):
         three_sigma_pos = 3.0 * np.sqrt(P_xx + P_yy)
         detP = np.det """
 
-        plt.plot(propPLS)
+        """ plt.plot(propPLS)
         plt.xlabel("Timestep")
         plt.ylabel("Determinant")
         plt.title("Covariance")
         plt.grid(True)
-        plt.show()
+        plt.show() """
     return efficiency_by_targetKL, t_by_target
 
 def plot_efficiency(efficiency_by_target, t_by_target):
@@ -1965,8 +2038,9 @@ def kalmanPlots():
 def main():
     # ****** Test with random policy ******
     n_targets = 5
-    #env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    #n_episodes = 100
+    seeds = [42, 123, 321]
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    n_episodes = 2
 
     #visualize_initial_positions(env)
 
@@ -1987,9 +2061,9 @@ def main():
     visualize_trained_agent(env, model, n_steps=30) """
     
 #def anotherMethod():
-    seeds = [42, 123, 321]
+    
 
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
+    """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
     n_episodes = 1
 
     # ****** Search ******
@@ -2038,10 +2112,10 @@ def main():
         "PPO": ppo_detections,
         "DQN": dqn_detections
     }
-    plot_violin(detection_results, ylabel="Number of Detections")
+    plot_violin(detection_results, ylabel="Number of Detections") """
 
-    """ # ****** Track ******
-    obs = env.reset()
+    # ****** Track ******
+    """ obs = env.reset()
     maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env)
     maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=n_episodes, deterministic_policy=False, maskable=True)
     print("Illegal action")
@@ -2052,10 +2126,23 @@ def main():
     print(np.std([np.mean(arr) for arr in exceedFOV_maskppo], ddof=1))
     print("Reward")
     print(sum(maskppo_rewards)/len(maskppo_rewards))
-    print(np.std([np.mean(arr) for arr in maskppo_rewards], ddof=1))
+    print(np.std([np.mean(arr) for arr in maskppo_rewards], ddof=1)) """
 
-    # ****** Deterministic policy ******
-    det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    # ****** Deterministic policy pFOV ******
+    det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=True, deterministic_policy_alternative=False)
+    print("Illegal action")
+    print(sum(illegal_actions_det)/len(illegal_actions_det))
+    print(np.std([np.mean(arr) for arr in illegal_actions_det], ddof=1))
+    print("Lost targets")
+    print(sum(exceedFOV_det)/len(exceedFOV_det))
+    print(np.std([np.mean(arr) for arr in exceedFOV_det], ddof=1))
+    print("Reward")
+    print(sum(det_rewards)/len(det_rewards))
+    print(np.std([np.mean(arr) for arr in det_rewards], ddof=1))
+
+    # ****** Deterministic policy IG******
+    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
     print("Illegal action")
     print(sum(illegal_actions_det)/len(illegal_actions_det))
     print(np.std([np.mean(arr) for arr in illegal_actions_det], ddof=1))
@@ -2067,7 +2154,7 @@ def main():
     print(np.std([np.mean(arr) for arr in det_rewards], ddof=1))
 
     # ****** Random policy ******
-    env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
+    """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
     # Reset environment ONCE and plot initial positions right after
     obs = env.reset()
     random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
@@ -2173,8 +2260,8 @@ def main():
  """
  
 if __name__ == "__main__":
-    main()
+    #main()
     #kalmanPlots()
     #rmsePlot()
-    #efficiencyPlot()
+    efficiencyPlot()
     #efficiencyOtherPlot()
