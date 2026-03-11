@@ -17,8 +17,8 @@ from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps =100_000
-mode = "search"
+total_timesteps =50_000
+mode = "track"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -85,16 +85,15 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = PPO(
             "MlpPolicy",
             env,
-            gamma=0.9, #0.91174708735671, #0.9951316261625073, #0.9158906517459942, #0.9790210247139031,   
-            n_steps=128, #1024, #512,
-            ent_coef=0.005, #0.027289552689688718, #0.04145091999215972, #0.0013392533378982774, #0.03158387252345037, 
-            learning_rate=0.0003, #0.00020547893214762386, #5.5104886882390796e-05, #0.0003, #0.0006609120604125945,    #0.0007266996909845838,   
-            vf_coef=0.5, #0.6728668016049194, #0.58944318346072, #0.3088596031455526, #0.8349958665992091, 
-            max_grad_norm=1.0, #0.38276422639245206, #0.40904524719654467, #0.3693696658724082, #0.7926595046318459,   
-            gae_lambda=0.8, #0.9668902419115192, #0.9190087075813886, #0.9572736445545191, #0.886078389184115,  
+            gamma=0.952199041429737,   
+            n_steps=384,
+            ent_coef=0.03565509800026144,
+            learning_rate=0.00044614011815097786,
+            vf_coef=0.8845018186381477, 
+            max_grad_norm=0.9464008722411874,
+            gae_lambda=0.9180541616290008,  
             n_epochs=10,
-            clip_range=0.5, #0.17974547307789224, #0.32790623385659234, #0.3890633888493019, #0.38403499436025856,  
-            batch_size=64,
+            batch_size=128,
             verbose=1,
         )
 
@@ -118,17 +117,17 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         model = DQN(
             "MlpPolicy",
             env,
-            learning_rate= 5.449952468830448e-05,
-            buffer_size=30000,
-            batch_size=128,
-            gamma=0.9728252031515489,
+            learning_rate= 8.450225441659817e-05,
+            buffer_size=50000,
+            batch_size=32,
+            gamma=0.9564895579103538,
             gradient_steps=8, #4,
-            learning_starts=10000,
-            exploration_fraction= 0.6102870049368956,
-            exploration_final_eps= 0.031764573244963186,
-            target_update_interval=12000,
-            max_grad_norm= 1.1777762743735063,
-            policy_kwargs=dict(net_arch=[256, 256]),
+            learning_starts=5000,
+            exploration_fraction= 0.6439219138656918,
+            exploration_final_eps= 0.02838206605656649,
+            target_update_interval=15000,
+            max_grad_norm= 1.805905030739738,
+            policy_kwargs=dict(net_arch=[128, 128]),
             verbose=1,
         )
     else:
@@ -217,9 +216,7 @@ def main():
         # Wrap with ActionMasker
         return ActionMasker(base_env, lambda env: env.action_masks())
     
-    env_mppo = DummyVecEnv([make_masked_env])
-    #train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
-
+    
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
@@ -228,7 +225,11 @@ def main():
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+
+    color_ppo = cm.get_cmap("tab10")(3)
+    env_mppo = DummyVecEnv([make_masked_env])
+    #train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)
