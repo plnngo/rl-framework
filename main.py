@@ -1589,14 +1589,14 @@ def repositionEfficiency(values, time):
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 10
+    n_episodes = 100
     episode_efficiencies_pfov = []
     episode_efficiencies_ig = []
     sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
-    sigma_r = 0.1        # 10 cm range noise
+    sigma_r = 0.001        # 1 mm range noise
     sigma = sigma_r
 
-    R = np.diag([sigma_theta**2, sigma_r**2])
+    R = np.diag([sigma**2, sigma**2])
 
     algorithms = ["Heuristic", "MaskPPO", "PPO", "DQN", "Random"]
     #meanEfficiencies = {alg: [] for alg in algorithms}

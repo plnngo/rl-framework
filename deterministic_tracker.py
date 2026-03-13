@@ -1,4 +1,6 @@
 import numpy as np
+import random
+import math
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 
@@ -29,6 +31,7 @@ def select_best_action_pFOV(env, dt=None):
     best_ig = -float('inf')
     highest_prob = -float('inf')
     best_update = None
+    fov = np.sqrt(2.5e-4) #env.fov_size 
 
     obsFunc = MultiTargetEnv.extract_measurement_XY
 
@@ -49,7 +52,7 @@ def select_best_action_pFOV(env, dt=None):
 
     # Pre-sum all predicted probs
     total_pred_prob = sum(
-        compute_fov_prob_single(env.fov_size, x_p, P_p)
+        compute_fov_prob_single(fov, x_p, P_p)
         for x_p, P_p in propagated.values()
     )
     # Main loop: choose one target as the sensing action 
@@ -66,8 +69,17 @@ def select_best_action_pFOV(env, dt=None):
         # Keep the best
         if prob > highest_prob:
             highest_prob = prob
-            best_target_id = idx
-            best_update = {"x": x_upd, "P": P_upd}
+            best_targets = [(idx, x_upd, P_upd)]
+
+        elif math.isclose(prob, highest_prob, rel_tol=1e-12, abs_tol=1e-15):
+            best_targets.append((idx, x_upd, P_upd))
+
+    # randomly choose among the tied best targets
+    best_target_id, x_best, P_best = random.choice(best_targets)
+    #print(highest_prob)
+    """ if len(best_targets) == 5:
+            print("Random") """
+    best_update = {"x": x_best, "P": P_best}
 
     return best_target_id, best_ig, best_update
 
@@ -98,6 +110,7 @@ def select_best_action_IG(env, dt=None):
     best_target_id = None
     best_ig = -float('inf')
     best_update = None
+    best_targets = []
 
     obsFunc = MultiTargetEnv.extract_measurement_XY
 
@@ -116,16 +129,22 @@ def select_best_action_IG(env, dt=None):
             motion_param=param
         )
 
-        # Perform the hypothetical EKF update (sensing action = choose idx)
+        # Perform the hypothetical EKF update
         x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R, obsFunc)
 
-        # Compute information gain (KL divergence)/ complementary probability
+        # Compute information gain
         ig = MultiTargetEnv.compute_kl_divergence(x_pred, P_pred, x_upd, P_upd)
 
         if ig > best_ig:
             best_ig = ig
-            best_target_id = idx
-            best_update = {"x": x_upd, "P": P_upd}
+            best_targets = [(idx, x_upd, P_upd)]
+
+        elif math.isclose(ig, best_ig, rel_tol=1e-12, abs_tol=1e-15):
+            best_targets.append((idx, x_upd, P_upd))
+
+    # Random tie-break
+    best_target_id, x_best, P_best = random.choice(best_targets)
+    best_update = {"x": x_best, "P": P_best}
 
     return best_target_id, best_ig, best_update
 
