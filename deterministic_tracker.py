@@ -4,7 +4,7 @@ import math
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 
-def select_best_action_pFOV(env, dt=None):
+def select_best_action_pFOV(env, dt=None, fov=4):
     """
     Returns the target ID that yields the highest probability to be inside FOV after measurement update
     when selecting it as the next action.
@@ -31,7 +31,7 @@ def select_best_action_pFOV(env, dt=None):
     best_ig = -float('inf')
     highest_prob = -float('inf')
     best_update = None
-    fov = np.sqrt(2.5e-4) #env.fov_size 
+    #fov = env.fov_size 
 
     obsFunc = MultiTargetEnv.extract_measurement_XY
 
@@ -77,8 +77,8 @@ def select_best_action_pFOV(env, dt=None):
     # randomly choose among the tied best targets
     best_target_id, x_best, P_best = random.choice(best_targets)
     #print(highest_prob)
-    """ if len(best_targets) == 5:
-            print("Random") """
+    if len(best_targets) == 5:
+            print("Random")
     best_update = {"x": x_best, "P": P_best}
 
     return best_target_id, best_ig, best_update
@@ -143,6 +143,8 @@ def select_best_action_IG(env, dt=None):
             best_targets.append((idx, x_upd, P_upd))
 
     # Random tie-break
+    if len(best_targets) == 5:
+            print("random")
     best_target_id, x_best, P_best = random.choice(best_targets)
     best_update = {"x": x_best, "P": P_best}
 
