@@ -76,7 +76,7 @@ def select_best_action_pFOV(env, dt=None, fov=4):
 
     # randomly choose among the tied best targets
     best_target_id, x_best, P_best = random.choice(best_targets)
-    #print(highest_prob)
+    print(highest_prob)
     if len(best_targets) == 5:
             print("Random")
     best_update = {"x": x_best, "P": P_best}
