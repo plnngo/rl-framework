@@ -28,9 +28,10 @@ class MultiTargetEnv(gym.Env):
 
         # generate measurement noise covariance (2x2)
         sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
-        sigma_r = 0.1        # 10 cm range noise
+        sigma_r = 0.001        # 1 cm range noise
+        sigma = sigma_r
 
-        self.R = np.diag([sigma_theta**2, sigma_r**2])
+        self.R = np.diag([sigma**2, sigma**2])
 
         # Parameters related to dynamical motion
         self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
