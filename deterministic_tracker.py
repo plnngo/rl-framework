@@ -62,8 +62,8 @@ def select_best_action_pFOV(env, dt=None, fov=4):
         x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R, obsFunc)
        
         # Swap out this target's predicted prob for its updated prob
-        prob_this_pred = compute_fov_prob_single(env.fov_size, x_pred, P_pred)
-        prob_this_upd  = compute_fov_prob_single(env.fov_size, x_upd,  P_upd)
+        prob_this_pred = compute_fov_prob_single(fov, x_pred, P_pred)
+        prob_this_upd  = compute_fov_prob_single(fov, x_upd,  P_upd)
         prob = total_pred_prob - prob_this_pred + prob_this_upd
 
         # Keep the best
@@ -76,9 +76,9 @@ def select_best_action_pFOV(env, dt=None, fov=4):
 
     # randomly choose among the tied best targets
     best_target_id, x_best, P_best = random.choice(best_targets)
-    print(highest_prob)
-    if len(best_targets) == 5:
-            print("Random")
+    #print(highest_prob)
+    """ if len(best_targets) == 5:
+            print("Random") """
     best_update = {"x": x_best, "P": P_best}
 
     return best_target_id, best_ig, best_update

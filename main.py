@@ -1842,7 +1842,7 @@ def efficiencyPlot():
     plt.fill_between(timesteps, mean_pfov15 - std_pfov15, mean_pfov15 + std_pfov15, alpha=0.3)
 
     plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV10")
-    plt.fill_between(timesteps, mean_pfov10 - std_pfov15, mean_pfov10 + std_pfov10, alpha=0.3)
+    plt.fill_between(timesteps, mean_pfov10 - std_pfov10, mean_pfov10 + std_pfov10, alpha=0.3)
 
     plt.xlabel("Time")
     plt.ylabel("Efficiency")

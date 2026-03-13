@@ -299,7 +299,7 @@ class MultiTargetEnv(gym.Env):
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
                 iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
@@ -308,7 +308,7 @@ class MultiTargetEnv(gym.Env):
                 #total_iG = iG
                 
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
@@ -319,7 +319,7 @@ class MultiTargetEnv(gym.Env):
 
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
-                probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
                 #print(1-prob)
                 """ if (1-prob)>total_iG:
