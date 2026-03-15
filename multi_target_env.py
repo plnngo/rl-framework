@@ -308,7 +308,7 @@ class MultiTargetEnv(gym.Env):
                 #total_iG = iG
                 
                 prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
