@@ -531,8 +531,8 @@ def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, det
         while not done:
             # --- Choose action ---
             if random_policy:
-                action = env.action_space.sample()
-                #action = 6
+                #action = env.action_space.sample()
+                action = np.random.randint(0, 5, dtype=np.int64)
             elif deterministic_policy:
                 action, best_ig, best_update = select_best_action_pFOV(env, env.dt, fov)
             elif deterministic_policy_alternative:
@@ -1483,6 +1483,7 @@ def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episo
     total_error_episodes = np.array(total_error_episodes)
 
     if len(error_episodes)>0:
+
         mean_pos_error_all_episodes = sum(error_episodes)/len(error_episodes)
         print("Mean of positional errors over all episodes " + str(mean_pos_error_all_episodes) + " +- ")
         print(np.std([np.mean(arr) for arr in error_episodes], ddof=1))
@@ -1589,13 +1590,15 @@ def repositionEfficiency(values, time):
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 1
+    n_episodes = 10
     episode_efficiencies_pfov4 = []
     episode_efficiencies_pfov25 = []
     episode_efficiencies_pfov15 = []
     episode_efficiencies_pfov10 = []
+    episode_efficiencies_Random = []
 
-    #episode_efficiencies_ig = []
+
+    episode_efficiencies_ig = []
     sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
     sigma_r = 0.001        # 1 mm range noise
     sigma = sigma_r
@@ -1652,7 +1655,7 @@ def efficiencyPlot():
             bestCov.append((tgt["id"], out["P0_post"]))
             estimates[tgt["id"]] = out
 
-        # Heuristic track pFOV
+        """ # Heuristic track pFOV
         start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
             evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=4)
@@ -1707,7 +1710,7 @@ def efficiencyPlot():
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLpFOV, t_by_target)
         episode_efficiencies_pfov15.append(mean_eff_targets)
 
-        env = last_env
+        env = last_env """
     
         # Heuristic track pFOV
         start = time.perf_counter()
@@ -1725,10 +1728,10 @@ def efficiencyPlot():
         # ---- Average across targets ----
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLpFOV, t_by_target)
         episode_efficiencies_pfov10.append(mean_eff_targets)
-        env.reset()
+        env = last_env
 
-        """ # Heuristic track IG
-        start = time.perf_counter()
+        # Heuristic track IG
+        """ start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
         evaluate_times_ig.append(time.perf_counter() - start)
         tracks = extract_tracks_from_log(last_episode_log)
@@ -1738,7 +1741,18 @@ def efficiencyPlot():
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLig, t_by_target)
         episode_efficiencies_ig.append(mean_eff_targets)
 
-        env.reset() """
+        env = last_env """
+ 
+        # ****** Random policy ******
+        """ random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=1, random_policy=True, deterministic_policy=False)
+        tracks = extract_tracks_from_log(last_episode_log)
+        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
+        efficiency_by_targetKLRandom, t_by_target = computeEff(klCov, tracks, estimates)
+        # ---- Average across targets ----
+        mean_eff_targets = repositionEfficiency(efficiency_by_targetKLRandom, t_by_target)
+        episode_efficiencies_Random.append(mean_eff_targets) """
+ 
+        env.reset()
         #eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
     
         #plot_efficiency(efficiency_by_target, t_by_target)
@@ -1799,26 +1813,26 @@ def efficiencyPlot():
             meanEfficiencies["Random"] += (eff_sum - meanEfficiencies["Random"]) / (i + 1)
             
     plot_mean_efficiencies(meanEfficiencies) """
-    episode_efficiencies_pfov4 = np.array(episode_efficiencies_pfov4)
+    """ episode_efficiencies_pfov4 = np.array(episode_efficiencies_pfov4)
     episode_efficiencies_pfov25 = np.array(episode_efficiencies_pfov25)
-    episode_efficiencies_pfov15 = np.array(episode_efficiencies_pfov15)
+    episode_efficiencies_pfov15 = np.array(episode_efficiencies_pfov15) """
     episode_efficiencies_pfov10 = np.array(episode_efficiencies_pfov10)
-
-
-
     #episode_efficiencies_ig = np.array(episode_efficiencies_ig)
+    #episode_efficiencies_Random = np.array(episode_efficiencies_Random)
 
-    mean_pfov4 = np.mean(episode_efficiencies_pfov4, axis=0)
+
+    """ mean_pfov4 = np.mean(episode_efficiencies_pfov4, axis=0)
     std_pfov4 = np.std(episode_efficiencies_pfov4, axis=0)
     mean_pfov25 = np.mean(episode_efficiencies_pfov25, axis=0)
     std_pfov25 = np.std(episode_efficiencies_pfov25, axis=0)
     mean_pfov15 = np.mean(episode_efficiencies_pfov15, axis=0)
-    std_pfov15 = np.std(episode_efficiencies_pfov15, axis=0)
+    std_pfov15 = np.std(episode_efficiencies_pfov15, axis=0) """
     mean_pfov10 = np.mean(episode_efficiencies_pfov10, axis=0)
     std_pfov10 = np.std(episode_efficiencies_pfov10, axis=0)
-
     """ mean_ig = np.mean(episode_efficiencies_ig, axis=0)
     std_ig = np.std(episode_efficiencies_ig, axis=0) """
+    """ mean_Random = np.mean(episode_efficiencies_Random, axis=0)
+    std_Random = np.std(episode_efficiencies_Random, axis=0) """
 
     """ # Time statistics
     mean_time_pfov = np.mean(evaluate_times_pfov)
@@ -1832,17 +1846,24 @@ def efficiencyPlot():
 
     plt.figure()
 
-    plt.plot(timesteps, mean_pfov4, label="Heuristic pFOV4")
+    """ plt.plot(timesteps, mean_pfov4, label="Heuristic pFOV4")
     plt.fill_between(timesteps, mean_pfov4 - std_pfov4, mean_pfov4 + std_pfov4, alpha=0.3)
 
     plt.plot(timesteps, mean_pfov25, label="Heuristic pFOV25")
     plt.fill_between(timesteps, mean_pfov25 - std_pfov25, mean_pfov25 + std_pfov25, alpha=0.3)
 
     plt.plot(timesteps, mean_pfov15, label="Heuristic pFOV15")
-    plt.fill_between(timesteps, mean_pfov15 - std_pfov15, mean_pfov15 + std_pfov15, alpha=0.3)
+    plt.fill_between(timesteps, mean_pfov15 - std_pfov15, mean_pfov15 + std_pfov15, alpha=0.3) """
 
-    plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV10")
-    plt.fill_between(timesteps, mean_pfov10 - std_pfov15, mean_pfov10 + std_pfov10, alpha=0.3)
+    plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(1.0e-5)")
+    plt.fill_between(timesteps, mean_pfov10 - std_pfov10, mean_pfov10 + std_pfov10, alpha=0.3)
+
+    """ plt.plot(timesteps, mean_ig, label="Heuristic IG")
+    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3) """
+
+    """ plt.plot(timesteps, mean_Random, label="Random")
+    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3) """
+
 
     plt.xlabel("Time")
     plt.ylabel("Efficiency")
