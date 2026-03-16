@@ -1242,6 +1242,8 @@ def extract_tracks_from_log(last_episode_log, n_targets=5):
 def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc):
     errors_all_targets = []
     total_trace_cov = []
+    KFstate = []
+    KFcov = []
     #for tgt_id, track in tracks.items():
     for tgt_id in range(len(all_target_states)):
         #print("Plot errors for target " + str(tgt_id))
@@ -1322,29 +1324,24 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc):
                         integrationFcn = KalmanFilter.int_constant_turn_stm_2D
                     break
 
-        """ t_all, Xk_mat, P_mat, resids = KalmanFilter.ckf_predict_update(
+        t_all, Xk_mat, P_mat, resids = KalmanFilter.ckf_predict_update(
                                         Xo_ref = tgt['x'],          # shape (4,)
                                         t_obs  = timesteps,         # shape (L,)
                                         tend   = last_env.max_steps,
                                         obs    = tgt_meas,          # shape (p, L)
                                         intfcn = integrationFcn,
-                                        H_fcn  = MultiTargetEnv.extract_measurement,   # must be callable
+                                        H_fcn  = obsFunc,
                                         inputs = inputs
-                                        )
+                                    )
         all_tgt_states = all_target_states[tgt_id]
         tgt_states_with_velocity = all_tgt_states[t_all, :]
         tgt_states = tgt_states_with_velocity.T[:4, :]
-        error = tgt_states - Xk_mat
-        #total_error_all_targets.append(error)
-        pos_error = np.sqrt((tgt_states[0, :] - Xk_mat[0, :])**2 + (tgt_states[1, :] - Xk_mat[1, :])**2)
-        three_sigma_pos = 3.0 * np.sqrt(P_mat[0,0,:] + P_mat[1,1,:])
-        trace_P = np.trace(P_mat, axis1=0, axis2=1)
-        trace_P_pos = np.trace(P_mat[0:2, 0:2, :], axis1=0, axis2=1) """
-        """ if timesteps:
+        trace_P_pos = np.trace(P_mat[0:2, 0:2, :], axis1=0, axis2=1)
+        if timesteps:
             selected_traces = trace_P_pos[timesteps[0]:]
         else:
-            selected_traces = trace_P_pos """
-        #total_trace_cov.append(selected_traces)
+            selected_traces = trace_P_pos
+        total_trace_cov.append(selected_traces)
 
         """ plt.figure()
         plt.plot(t_all, three_sigma_pos, label="+3σ x")
@@ -1369,12 +1366,12 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc):
                         H_fcn  = obsFunc,   
                         inputs = inputs
                     )
-        """ all_tgt_states = all_target_states[tgt_id]
+        all_tgt_states = all_target_states[tgt_id]
         tgt_states_with_velocity = all_tgt_states[timesteps, :]
         tgt_states = tgt_states_with_velocity.T[:4, :]
         error = tgt_states - Xk
-        #errors_all_targets.append(error)
-        pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
+        errors_all_targets.append(error)
+        """ pos_error = np.sqrt((tgt_states[0, :] - Xk[0, :])**2 + (tgt_states[1, :] - Xk[1, :])**2)
         three_sigma_x  = 3.0 * np.sqrt(Pk[0, 0, :])
         three_sigma_y  = 3.0 * np.sqrt(Pk[1, 1, :])
         three_sigma_vx = 3.0 * np.sqrt(Pk[2, 2, :])
@@ -1383,8 +1380,8 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc):
 
         t = timesteps """
 
-        errors_all_targets.append(Xk)
-        total_trace_cov.append(Pk)
+        KFstate.append(Xk)
+        KFcov.append(Pk)
 
         """ plt.figure()
         plt.plot(t, three_sigma_x, label="+3σ x")
@@ -1416,7 +1413,7 @@ def estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc):
         plt.grid(True)
         plt.show() """
 
-    return errors_all_targets, total_trace_cov
+    return errors_all_targets, total_trace_cov, KFstate, KFcov
 
 def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episodes=100, sigma_theta=0, sigma_r=0, R=None, Q=None):
     error_episodes = []
@@ -1453,7 +1450,6 @@ def computeRMSEalgo(heuristic=False, random=False, model=None, env=None, n_episo
 
         episode_error = 0
         for tgt_error in errors_all_targets:
-            # tgt_error shape: (state_dim, T_i)
             pos_error = tgt_error[:2, :]                  # (2, T_i)
             sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
             if len(sq_err) == 0:
@@ -1590,7 +1586,7 @@ def repositionEfficiency(values, time):
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 10
+    n_episodes = 2
     episode_efficiencies_pfov4 = []
     episode_efficiencies_pfov25 = []
     episode_efficiencies_pfov15 = []
@@ -1612,9 +1608,13 @@ def efficiencyPlot():
     evaluate_times_pfov25 = []
     evaluate_times_pfov15 = []
     evaluate_times_pfov10 = []
-
-
     evaluate_times_ig = []
+
+    error_episodespFOV = []
+    total_error_episodespFOV = []
+
+    error_episodesIG = []
+    total_error_episodesIG = []
     for i in range(n_episodes):
 
         # Generate truth data
@@ -1715,13 +1715,36 @@ def efficiencyPlot():
         # Heuristic track pFOV
         start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
-            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(1.0e-5))
+            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8))
         evaluate_times_pfov10.append(time.perf_counter() - start)
 
         #tracks = constant_obs_all_targets(estimates=estimates)
         tracks = extract_tracks_from_log(last_episode_log)
 
-        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
+        errors_all_targets, total_trace_cov, klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
+        episode_error = 0
+        for tgt_error in errors_all_targets:
+            pos_error = tgt_error[:2, :]                  # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            if len(sq_err) == 0:
+                continue    # target has not been tracked at all
+            rmse_target = np.sqrt(np.mean(sq_err))
+            episode_error = episode_error + rmse_target
+        if len(errors_all_targets)>0:
+            rmse_all_target = episode_error/len(errors_all_targets)
+            if not np.isnan(rmse_all_target): 
+                error_episodespFOV.append(rmse_all_target)
+            else:
+                print("error is nan")
+
+        total_episode_trace_cov = sum(np.sum(arr) for arr in total_trace_cov)
+
+        if len(total_trace_cov)>0:
+            total_rmse_all_target = total_episode_trace_cov/len(total_trace_cov)
+            total_error_episodespFOV.append(total_rmse_all_target)
+
+
+    
 
         efficiency_by_targetKLpFOV, t_by_target = computeEff(klCov, tracks, estimates)
 
@@ -1731,17 +1754,39 @@ def efficiencyPlot():
         env = last_env
 
         # Heuristic track IG
-        """ start = time.perf_counter()
+        start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
         evaluate_times_ig.append(time.perf_counter() - start)
         tracks = extract_tracks_from_log(last_episode_log)
 
-        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc) 
+        errors_all_targets, total_trace_cov, klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc) 
+        episode_error = 0
+        for tgt_error in errors_all_targets:
+            pos_error = tgt_error[:2, :]                  # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            if len(sq_err) == 0:
+                continue    # target has not been tracked at all
+            rmse_target = np.sqrt(np.mean(sq_err))
+            episode_error = episode_error + rmse_target
+        if len(errors_all_targets)>0:
+            rmse_all_target = episode_error/len(errors_all_targets)
+            if not np.isnan(rmse_all_target): 
+                error_episodesIG.append(rmse_all_target)
+            else:
+                print("error is nan")
+
+        total_episode_trace_cov = sum(np.sum(arr) for arr in total_trace_cov)
+
+        if len(total_trace_cov)>0:
+            total_rmse_all_target = total_episode_trace_cov/len(total_trace_cov)
+            total_error_episodesIG.append(total_rmse_all_target)
+
+
         efficiency_by_targetKLig, t_by_target = computeEff(klCov, tracks, estimates)
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLig, t_by_target)
         episode_efficiencies_ig.append(mean_eff_targets)
 
-        env = last_env """
+        env = last_env
  
         # ****** Random policy ******
         """ random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=1, random_policy=True, deterministic_policy=False)
@@ -1817,7 +1862,7 @@ def efficiencyPlot():
     episode_efficiencies_pfov25 = np.array(episode_efficiencies_pfov25)
     episode_efficiencies_pfov15 = np.array(episode_efficiencies_pfov15) """
     episode_efficiencies_pfov10 = np.array(episode_efficiencies_pfov10)
-    #episode_efficiencies_ig = np.array(episode_efficiencies_ig)
+    episode_efficiencies_ig = np.array(episode_efficiencies_ig)
     #episode_efficiencies_Random = np.array(episode_efficiencies_Random)
 
 
@@ -1829,20 +1874,45 @@ def efficiencyPlot():
     std_pfov15 = np.std(episode_efficiencies_pfov15, axis=0) """
     mean_pfov10 = np.mean(episode_efficiencies_pfov10, axis=0)
     std_pfov10 = np.std(episode_efficiencies_pfov10, axis=0)
-    """ mean_ig = np.mean(episode_efficiencies_ig, axis=0)
-    std_ig = np.std(episode_efficiencies_ig, axis=0) """
+    mean_ig = np.mean(episode_efficiencies_ig, axis=0)
+    std_ig = np.std(episode_efficiencies_ig, axis=0)
     """ mean_Random = np.mean(episode_efficiencies_Random, axis=0)
     std_Random = np.std(episode_efficiencies_Random, axis=0) """
 
-    """ # Time statistics
-    mean_time_pfov = np.mean(evaluate_times_pfov)
-    std_time_pfov  = np.std(evaluate_times_pfov)
+    # Time statistics
+    mean_time_pfov = np.mean(evaluate_times_pfov10)
+    std_time_pfov  = np.std(evaluate_times_pfov10)
 
     mean_time_ig   = np.mean(evaluate_times_ig)
     std_time_ig    = np.std(evaluate_times_ig)
 
     print(f"evaluate_agent_track (pFOV) — mean: {mean_time_pfov:.4f}s, std: {std_time_pfov:.4f}s")
-    print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s") """
+    print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s")
+
+    error_episodespFOV = np.array(error_episodespFOV)
+    total_error_episodespFOV = np.array(total_error_episodespFOV)
+
+    if len(error_episodespFOV)>0:
+
+        mean_pos_error_all_episodes = sum(error_episodespFOV)/len(error_episodespFOV)
+        print("Mean of positional errors over all episodes pFOV" + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodespFOV], ddof=1))
+    if len(total_error_episodespFOV)>0:
+        mean_pos_total_error_all_episodes = sum(total_error_episodespFOV)/len(total_error_episodespFOV)
+        print("Mean of covariance trace over all episodes pFOV " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in total_error_episodespFOV], ddof=1))
+
+    error_episodesIG = np.array(error_episodesIG)
+    total_error_episodesIG = np.array(total_error_episodesIG)
+    if len(error_episodesIG)>0:
+
+        mean_pos_error_all_episodes = sum(error_episodesIG)/len(error_episodesIG)
+        print("Mean of positional errors over all episodes IG " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodesIG], ddof=1))
+    if len(total_error_episodesIG)>0:
+        mean_pos_total_error_all_episodes = sum(total_error_episodesIG)/len(total_error_episodesIG)
+        print("Mean of covariance trace over all episodes pFOV " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in total_error_episodesIG], ddof=1))
 
     plt.figure()
 
@@ -1855,11 +1925,11 @@ def efficiencyPlot():
     plt.plot(timesteps, mean_pfov15, label="Heuristic pFOV15")
     plt.fill_between(timesteps, mean_pfov15 - std_pfov15, mean_pfov15 + std_pfov15, alpha=0.3) """
 
-    plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(1.0e-5)")
+    plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(2.0e-8)")
     plt.fill_between(timesteps, mean_pfov10 - std_pfov10, mean_pfov10 + std_pfov10, alpha=0.3)
 
-    """ plt.plot(timesteps, mean_ig, label="Heuristic IG")
-    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3) """
+    plt.plot(timesteps, mean_ig, label="Heuristic IG")
+    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3)
 
     """ plt.plot(timesteps, mean_Random, label="Random")
     plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3) """
