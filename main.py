@@ -1586,7 +1586,7 @@ def repositionEfficiency(values, time):
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 2
+    n_episodes = 100
     episode_efficiencies_pfov4 = []
     episode_efficiencies_pfov25 = []
     episode_efficiencies_pfov15 = []
