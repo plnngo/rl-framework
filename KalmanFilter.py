@@ -247,8 +247,8 @@ def ckf_predict_update(Xo_ref, t_obs, tend, obs, intfcn, H_fcn, inputs):
         if t in meas_dict:
             Yk = meas_dict[t]
 
-            theta, r, Hk_til = H_fcn(Xref)
-            Gk = np.array([theta, r])
+            Hk_til, Gk = H_fcn(Xref)
+            #Gk = np.array([theta, r])
             yk = Yk - Gk
 
             S = Hk_til @ Pbar @ Hk_til.T + Rk
