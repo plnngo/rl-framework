@@ -298,24 +298,24 @@ class MultiTargetEnv(gym.Env):
             if target_id and idx == micro:
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
                 iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
-                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                #prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
                 #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
-                #print(prob)
+                #print(iG)
                 #print(probFull)
                 #print(probFull - prob)
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
                 #total_iG = iG
                 
-                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                #prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
                 #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
-                prob_reward += prob
+                """ prob_reward += prob
                 lost = 1 - prob
                 if lost>total_iG:
-                    total_iG = lost_reward
+                    total_iG = lost_reward """
 
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
@@ -325,9 +325,12 @@ class MultiTargetEnv(gym.Env):
                 """ if (1-prob)>total_iG:
                     total_iG = 1-prob
                 prob_reward += prob """
+                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
+                iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
+                #print(iG)
                 if prob<self.threshold_fov:
                     # target is considered as lost
-                    lost_reward = lost_reward-0.25
+                    #lost_reward = lost_reward-0.25
                     lost_targets.append(tgt)
                     self._remove_lost_tracking_target(idx)
                 else:
@@ -351,15 +354,15 @@ class MultiTargetEnv(gym.Env):
             self.step_count += 1
 
             # Check validity
-            if not self.known_mask[target_id]:
-                invalid_action = True
-            else:
+            if self.known_mask[target_id]:
                 invalid_action = False
-                """ # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
-                info = {"invalid_action": True, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
+            else:
+                invalid_action = True
+                # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
+                info = {"invalid_action": invalid_action, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
                 # Termination
                 done = self.step_count >= self.max_steps
-                return obs, -1.0, done, False, info """
+                return obs, -10.0, done, False, info
 
             # Simple reward = total information gain (KL) or punishment for loosing target
             """ if lost_reward<0:
@@ -375,7 +378,7 @@ class MultiTargetEnv(gym.Env):
                 reward = -1
             if self.n_targets == self.init_n_target:
                 reward += 1 """
-            reward = prob_reward
+            reward = iG /1e5 #scale down
             """ # Penalty for losing targets this step
             if lost_targets:
                 obs = self._get_obs()
@@ -619,7 +622,7 @@ class MultiTargetEnv(gym.Env):
         for i, tgt in enumerate(all_targets):
             x, y, vx, vy = tgt["x"]
             trace = np.trace(tgt["P"])
-            p_fov = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
+            #p_fov = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
             #p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
             known = 1.0 if self.known_mask[tgt["id"]] else 0.0
             

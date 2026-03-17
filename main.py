@@ -1609,12 +1609,17 @@ def efficiencyPlot():
     evaluate_times_pfov15 = []
     evaluate_times_pfov10 = []
     evaluate_times_ig = []
+    evaluate_times_random = []
+
 
     error_episodespFOV = []
     total_error_episodespFOV = []
 
     error_episodesIG = []
     total_error_episodesIG = []
+
+    error_episodesRandom = []
+    total_error_episodesRandom = []
     for i in range(n_episodes):
 
         # Generate truth data
@@ -1713,7 +1718,7 @@ def efficiencyPlot():
         env = last_env """
     
         # Heuristic track pFOV
-        start = time.perf_counter()
+        """ start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
             evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8))
         evaluate_times_pfov10.append(time.perf_counter() - start)
@@ -1784,18 +1789,40 @@ def efficiencyPlot():
 
         efficiency_by_targetKLig, t_by_target = computeEff(klCov, tracks, estimates)
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLig, t_by_target)
-        episode_efficiencies_ig.append(mean_eff_targets)
+        episode_efficiencies_ig.append(mean_eff_targets) """
 
-        env = last_env
+        #env = last_env
  
         # ****** Random policy ******
-        """ random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=1, random_policy=True, deterministic_policy=False)
+        start = time.perf_counter()
+        random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=1, random_policy=True, deterministic_policy=False)
+        evaluate_times_random.append(time.perf_counter() - start)
         tracks = extract_tracks_from_log(last_episode_log)
-        klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
+        errors_all_targets, total_trace_cov, klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
+        episode_error = 0
+        for tgt_error in errors_all_targets:
+            pos_error = tgt_error[:2, :]                  # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            if len(sq_err) == 0:
+                continue    # target has not been tracked at all
+            rmse_target = np.sqrt(np.mean(sq_err))
+            episode_error = episode_error + rmse_target
+        if len(errors_all_targets)>0:
+            rmse_all_target = episode_error/len(errors_all_targets)
+            if not np.isnan(rmse_all_target): 
+                error_episodesRandom.append(rmse_all_target)
+            else:
+                print("error is nan")
+
+        total_episode_trace_cov = sum(np.sum(arr) for arr in total_trace_cov)
+
+        if len(total_trace_cov)>0:
+            total_rmse_all_target = total_episode_trace_cov/len(total_trace_cov)
+            total_error_episodesRandom.append(total_rmse_all_target)
         efficiency_by_targetKLRandom, t_by_target = computeEff(klCov, tracks, estimates)
         # ---- Average across targets ----
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLRandom, t_by_target)
-        episode_efficiencies_Random.append(mean_eff_targets) """
+        episode_efficiencies_Random.append(mean_eff_targets)
  
         env.reset()
         #eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
@@ -1861,9 +1888,9 @@ def efficiencyPlot():
     """ episode_efficiencies_pfov4 = np.array(episode_efficiencies_pfov4)
     episode_efficiencies_pfov25 = np.array(episode_efficiencies_pfov25)
     episode_efficiencies_pfov15 = np.array(episode_efficiencies_pfov15) """
-    episode_efficiencies_pfov10 = np.array(episode_efficiencies_pfov10)
-    episode_efficiencies_ig = np.array(episode_efficiencies_ig)
-    #episode_efficiencies_Random = np.array(episode_efficiencies_Random)
+    """ episode_efficiencies_pfov10 = np.array(episode_efficiencies_pfov10)
+    episode_efficiencies_ig = np.array(episode_efficiencies_ig) """
+    episode_efficiencies_Random = np.array(episode_efficiencies_Random)
 
 
     """ mean_pfov4 = np.mean(episode_efficiencies_pfov4, axis=0)
@@ -1872,24 +1899,29 @@ def efficiencyPlot():
     std_pfov25 = np.std(episode_efficiencies_pfov25, axis=0)
     mean_pfov15 = np.mean(episode_efficiencies_pfov15, axis=0)
     std_pfov15 = np.std(episode_efficiencies_pfov15, axis=0) """
-    mean_pfov10 = np.mean(episode_efficiencies_pfov10, axis=0)
+    """ mean_pfov10 = np.mean(episode_efficiencies_pfov10, axis=0)
     std_pfov10 = np.std(episode_efficiencies_pfov10, axis=0)
     mean_ig = np.mean(episode_efficiencies_ig, axis=0)
-    std_ig = np.std(episode_efficiencies_ig, axis=0)
-    """ mean_Random = np.mean(episode_efficiencies_Random, axis=0)
-    std_Random = np.std(episode_efficiencies_Random, axis=0) """
+    std_ig = np.std(episode_efficiencies_ig, axis=0) """
+    mean_Random = np.mean(episode_efficiencies_Random, axis=0)
+    std_Random = np.std(episode_efficiencies_Random, axis=0)
 
     # Time statistics
-    mean_time_pfov = np.mean(evaluate_times_pfov10)
+    """ mean_time_pfov = np.mean(evaluate_times_pfov10)
     std_time_pfov  = np.std(evaluate_times_pfov10)
 
     mean_time_ig   = np.mean(evaluate_times_ig)
-    std_time_ig    = np.std(evaluate_times_ig)
+    std_time_ig    = np.std(evaluate_times_ig) """
 
-    print(f"evaluate_agent_track (pFOV) — mean: {mean_time_pfov:.4f}s, std: {std_time_pfov:.4f}s")
-    print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s")
+    mean_time_random   = np.mean(evaluate_times_random)
+    std_time_random    = np.std(evaluate_times_random)
 
-    error_episodespFOV = np.array(error_episodespFOV)
+    """ print(f"evaluate_agent_track (pFOV) — mean: {mean_time_pfov:.4f}s, std: {std_time_pfov:.4f}s")
+    print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s") """
+    print(f"evaluate_agent_track (Random)   — mean: {mean_time_random:.4f}s,   std: {std_time_random:.4f}s")
+
+
+    """ error_episodespFOV = np.array(error_episodespFOV)
     total_error_episodespFOV = np.array(total_error_episodespFOV)
 
     if len(error_episodespFOV)>0:
@@ -1912,7 +1944,19 @@ def efficiencyPlot():
     if len(total_error_episodesIG)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesIG)/len(total_error_episodesIG)
         print("Mean of covariance trace over all episodes IG " + str(mean_pos_total_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in total_error_episodesIG], ddof=1))
+        print(np.std([np.mean(arr) for arr in total_error_episodesIG], ddof=1)) """
+
+    error_episodesRandom = np.array(error_episodesRandom)
+    total_error_episodesRandom = np.array(total_error_episodesRandom)
+    if len(error_episodesRandom)>0:
+
+        mean_pos_error_all_episodes = sum(error_episodesRandom)/len(error_episodesRandom)
+        print("Mean of positional errors over all episodes Random " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodesRandom], ddof=1))
+    if len(total_error_episodesRandom)>0:
+        mean_pos_total_error_all_episodes = sum(total_error_episodesRandom)/len(total_error_episodesRandom)
+        print("Mean of covariance trace over all episodes Random " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in total_error_episodesRandom], ddof=1))
 
     plt.figure()
 
@@ -1925,14 +1969,14 @@ def efficiencyPlot():
     plt.plot(timesteps, mean_pfov15, label="Heuristic pFOV15")
     plt.fill_between(timesteps, mean_pfov15 - std_pfov15, mean_pfov15 + std_pfov15, alpha=0.3) """
 
-    plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(2.0e-8)")
+    """ plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(2.0e-8)")
     plt.fill_between(timesteps, mean_pfov10 - std_pfov10, mean_pfov10 + std_pfov10, alpha=0.3)
 
     plt.plot(timesteps, mean_ig, label="Heuristic IG")
-    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3)
+    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3) """
 
-    """ plt.plot(timesteps, mean_Random, label="Random")
-    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3) """
+    plt.plot(timesteps, mean_Random, label="Random")
+    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3)
 
 
     plt.xlabel("Time")
