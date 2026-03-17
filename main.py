@@ -1895,7 +1895,7 @@ def efficiencyPlot():
     if len(error_episodespFOV)>0:
 
         mean_pos_error_all_episodes = sum(error_episodespFOV)/len(error_episodespFOV)
-        print("Mean of positional errors over all episodes pFOV" + str(mean_pos_error_all_episodes) + " +- ")
+        print("Mean of positional errors over all episodes pFOV " + str(mean_pos_error_all_episodes) + " +- ")
         print(np.std([np.mean(arr) for arr in error_episodespFOV], ddof=1))
     if len(total_error_episodespFOV)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodespFOV)/len(total_error_episodespFOV)
@@ -1911,7 +1911,7 @@ def efficiencyPlot():
         print(np.std([np.mean(arr) for arr in error_episodesIG], ddof=1))
     if len(total_error_episodesIG)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesIG)/len(total_error_episodesIG)
-        print("Mean of covariance trace over all episodes pFOV " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print("Mean of covariance trace over all episodes IG " + str(mean_pos_total_error_all_episodes) + " +- ")
         print(np.std([np.mean(arr) for arr in total_error_episodesIG], ddof=1))
 
     plt.figure()
