@@ -220,7 +220,7 @@ def main():
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)

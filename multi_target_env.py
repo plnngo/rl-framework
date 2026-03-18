@@ -25,6 +25,7 @@ class MultiTargetEnv(gym.Env):
         self.lost_counter = 0
         self.detect_counter = 0
         self.rng = np.random.default_rng(seed)
+        self.boundary = np.sqrt(2.0e-8)
 
         # generate measurement noise covariance (2x2)
         sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
@@ -297,7 +298,7 @@ class MultiTargetEnv(gym.Env):
             # compute measurement related to action
             if target_id and idx == micro:
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
-                iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
+                #iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 #prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
                 #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(iG)
@@ -307,28 +308,30 @@ class MultiTargetEnv(gym.Env):
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
                 #total_iG = iG
                 
-                #prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
                 #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
                 #print(prob)
                 #print(probFull)
                 #print(probFull - prob)
-                """ prob_reward += prob
+                prob_reward += prob
                 lost = 1 - prob
                 if lost>total_iG:
-                    total_iG = lost_reward """
+                    total_iG = lost_reward
 
             # Otherwise: compute FOV-probability reward for this neglected target
             else:
                 #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
-                prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+                prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
+                probMaintainFOV = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
+
                 #print(1-prob)
                 """ if (1-prob)>total_iG:
                     total_iG = 1-prob
                 prob_reward += prob """
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
-                iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
+                #iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 #print(iG)
-                if prob<self.threshold_fov:
+                if probMaintainFOV<self.threshold_fov:
                     # target is considered as lost
                     #lost_reward = lost_reward-0.25
                     lost_targets.append(tgt)
@@ -378,7 +381,7 @@ class MultiTargetEnv(gym.Env):
                 reward = -1
             if self.n_targets == self.init_n_target:
                 reward += 1 """
-            reward = iG /1e5 #scale down
+            reward = prob_reward #iG /1e5 #scale down
             """ # Penalty for losing targets this step
             if lost_targets:
                 obs = self._get_obs()
