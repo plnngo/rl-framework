@@ -11,13 +11,13 @@ from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker 
 
 from multi_target_env import MultiTargetEnv
-from train_agent import SharedLivePlot, LivePlotCallback  # assumes you already have these
+from train_agent import SharedLivePlot, LivePlotCallback  
 
 
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps =50_000
+total_timesteps =200_000
 mode = "track"
 save_dir = "results"
 os.makedirs(save_dir, exist_ok=True)
@@ -143,6 +143,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
 
     # Train model
     model.learn(total_timesteps=total_timesteps, callback=callback)
+    #callback.plot_advantages()
 
     # Save model
     model_path = os.path.join(save_dir, f"{algo_name.lower()}_{mode}_trained_IEEE.zip")
@@ -220,16 +221,16 @@ def main():
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     color_mppo = cm.get_cmap("tab10")(3)
     env_mppo = DummyVecEnv([make_masked_env])
-    #train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
+    train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)
