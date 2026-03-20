@@ -30,6 +30,7 @@ def select_best_action_pFOV(env, dt=None, fov=4):
     best_target_id = None
     best_ig = -float('inf')
     highest_prob = -float('inf')
+    lowest_trace = float('inf')
     best_update = None
     #fov = env.fov_size 
 
@@ -37,6 +38,7 @@ def select_best_action_pFOV(env, dt=None, fov=4):
 
     # Pre-compute propagations for all targets
     propagated = {}
+    trace = 0
     for tgt in env.targets:
         idx = tgt['id']
         model = env.motion_model[idx]
@@ -49,12 +51,14 @@ def select_best_action_pFOV(env, dt=None, fov=4):
             motion_param=param
         )
         propagated[idx] = (x_pred, P_pred)
+        trace += np.trace(P_pred)
 
     # Pre-sum all predicted probs
-    total_pred_prob = sum(
+    """ total_pred_prob = sum(
         compute_fov_prob_single(fov, x_p, P_p)
         for x_p, P_p in propagated.values()
-    )
+    ) """
+
     # Main loop: choose one target as the sensing action 
     for tgt in env.targets:
         idx = tgt['id']
@@ -64,21 +68,32 @@ def select_best_action_pFOV(env, dt=None, fov=4):
         # Swap out this target's predicted prob for its updated prob
         prob_this_pred = compute_fov_prob_single(fov, x_pred, P_pred)
         prob_this_upd  = compute_fov_prob_single(fov, x_upd,  P_upd)
-        prob = total_pred_prob - prob_this_pred + prob_this_upd
+        #prob = total_pred_prob - prob_this_pred + prob_this_upd
+        traceUpdated = trace - np.trace(P_pred) + np.trace(P_upd)
+        """ print(f"traceUpdated={traceUpdated:.4f}, "
+            f"trace_diff={(np.trace(P_pred) - np.trace(P_upd)):.4f}, "
+            f"trace(P_pred)={np.trace(P_pred):.4f}, "
+            f"trace(P_upd)={np.trace(P_upd):.4f}") """
 
         # Keep the best
-        if prob > highest_prob:
+        """ if prob > highest_prob:
             highest_prob = prob
             best_targets = [(idx, x_upd, P_upd)]
 
         elif math.isclose(prob, highest_prob, rel_tol=1e-12, abs_tol=1e-15):
+            best_targets.append((idx, x_upd, P_upd)) """
+        if traceUpdated < lowest_trace:
+            lowest_trace = traceUpdated
+            best_targets = [(idx, x_upd, P_upd)]
+
+        elif math.isclose(traceUpdated, lowest_trace, rel_tol=1e-12, abs_tol=1e-15):
             best_targets.append((idx, x_upd, P_upd))
 
     # randomly choose among the tied best targets
     best_target_id, x_best, P_best = random.choice(best_targets)
-    """ print(highest_prob)
-    if len(best_targets) == 5:
-            print("Random") """
+    #print(highest_prob)
+    if len(best_targets) > 1:
+            print("Random")
     best_update = {"x": x_best, "P": P_best}
 
     return best_target_id, best_ig, best_update
