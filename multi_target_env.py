@@ -88,7 +88,7 @@ class MultiTargetEnv(gym.Env):
 
         # New per-target dimension:
         if mode == "track":
-            self.obs_dim_per_target = 1   # dx, dy, vx, vy, p_fov, known_mask
+            self.obs_dim_per_target = 2   # dx, dy, vx, vy, p_fov, known_mask
             #self.obs_dim_per_target = 3
 
             #obs_len = self.init_n_target * self.obs_dim_per_target
@@ -285,6 +285,7 @@ class MultiTargetEnv(gym.Env):
             self.obs = obs
             return obs, reward, done, truncated, info """
 
+        trace_reward = 0
         # propagate all known targets
         for tgt in self.targets.copy():
 
@@ -294,9 +295,11 @@ class MultiTargetEnv(gym.Env):
 
             # retrieve predictions by propagating each known target
             tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
+            trace_reward += np.trace(tgt['P']) 
 
             # compute measurement related to action
             if target_id and idx == micro:
+                trace_reward -= np.trace(tgt['P']) 
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
                 #iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
                 #prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
@@ -306,6 +309,8 @@ class MultiTargetEnv(gym.Env):
                 #print(probFull - prob)
                 # Update
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
+                trace_reward += np.trace(tgt['P']) 
+
                 #total_iG = iG
                 
                 prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
@@ -330,7 +335,7 @@ class MultiTargetEnv(gym.Env):
                 prob_reward += prob """
                 xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
                 #iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
-                #print(iG)
+                #print(prob)
                 if probMaintainFOV<self.threshold_fov:
                     # target is considered as lost
                     #lost_reward = lost_reward-0.25
@@ -381,7 +386,7 @@ class MultiTargetEnv(gym.Env):
                 reward = -1
             if self.n_targets == self.init_n_target:
                 reward += 1 """
-            reward = prob_reward #iG /1e5 #scale down
+            reward = -trace_reward #prob_reward #iG /1e5 #scale down
             """ # Penalty for losing targets this step
             if lost_targets:
                 obs = self._get_obs()
@@ -626,13 +631,13 @@ class MultiTargetEnv(gym.Env):
             x, y, vx, vy = tgt["x"]
             trace = np.trace(tgt["P"])
             #p_fov = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
-            #p_fov = compute_fov_prob_single(self.fov_size, tgt["x"], tgt["P"])
+            p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
             known = 1.0 if self.known_mask[tgt["id"]] else 0.0
             
             # Provide more informative features:
             obs_list.extend([
-                trace * known#,      # Uncertainty (your current feature)
-                #p_fov * known,      # Risk of losing this target (NEW!)
+                trace * known,      # Uncertainty (your current feature)
+                p_fov * known,      # Risk of losing this target 
                 #known               # Is this target tracked? (NEW!)
             ])
         
