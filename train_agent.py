@@ -18,21 +18,37 @@ class SharedLivePlot:
         self.ax.set_ylabel("Episode Reward")
         self.ax.set_title(title)
 
-    def register_line(self, name, color):
-        """Register a new line for a training run."""
+        self.fig_adv, (self.ax_adv_mean, self.ax_adv_std) = plt.subplots(1, 2, figsize=(12, 4))
+        self.ax_adv_mean.set_title("Mean Advantage over Training")
+        self.ax_adv_mean.set_xlabel("Timesteps")
+        self.ax_adv_mean.set_ylabel("Advantage")
+        self.ax_adv_mean.axhline(0, color='gray', linestyle='--', linewidth=0.8)
+        self.ax_adv_std.set_title("Advantage Std over Training")
+        self.ax_adv_std.set_xlabel("Timesteps")
+        self.adv_lines = {}
+
+    def register_line(self, name, color):          # ← was missing
         line, = self.ax.plot([], [], color=color, label=name)
         self.lines[name] = {"line": line, "timesteps": [], "rewards": []}
         self.ax.legend()
 
-    def update(self, name, episode_reward, episode_length):
-        """Append new data and refresh plot."""
-        data = self.lines[name]
-        # Append cumulative timestep and reward
-        total_timesteps = sum(data["timesteps"]) + episode_length if data["timesteps"] else episode_length
-        data["timesteps"].append(episode_length if not data["timesteps"] else episode_length)
-        data["rewards"].append(episode_reward)
+    def register_advantage_line(self, name, color):
+        line_mean, = self.ax_adv_mean.plot([], [], color=color, label=name)
+        line_std,  = self.ax_adv_std.plot([], [], color=color, label=name)
+        self.adv_lines[name] = {
+            "line_mean": line_mean,
+            "line_std": line_std,
+            "timesteps": [],
+            "mean": [],
+            "std": []
+        }
+        self.ax_adv_mean.legend()
+        self.ax_adv_std.legend()
 
-        # Update line
+    def update(self, name, episode_reward, episode_length):   # ← was missing
+        data = self.lines[name]
+        data["timesteps"].append(episode_length)
+        data["rewards"].append(episode_reward)
         cumulative_timesteps = np.cumsum(data["timesteps"])
         data["line"].set_data(cumulative_timesteps, data["rewards"])
         self.ax.relim()
@@ -40,14 +56,30 @@ class SharedLivePlot:
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
-    def finalize(self):
-        plt.ioff()
-        self.ax.legend()
-        plt.show()
+    def update_advantages(self, name, timestep, mean_adv, std_adv):
+        data = self.adv_lines[name]
+        data["timesteps"].append(timestep)
+        data["mean"].append(mean_adv)
+        data["std"].append(std_adv)
+        data["line_mean"].set_data(data["timesteps"], data["mean"])
+        data["line_std"].set_data(data["timesteps"], data["std"])
+        self.ax_adv_mean.relim()
+        self.ax_adv_mean.autoscale_view()
+        self.ax_adv_std.relim()
+        self.ax_adv_std.autoscale_view()
+        self.fig_adv.canvas.draw()
+        self.fig_adv.canvas.flush_events()
 
     def get_average_reward(self, name):
         data = self.lines[name]
         return np.mean(data["rewards"]) if len(data["rewards"]) > 0 else np.nan
+
+    def finalize(self):
+        plt.ioff()
+        self.ax.legend()
+        self.fig.savefig("episode_rewards.pdf")
+        self.fig_adv.savefig("advantage_log.pdf")
+        plt.show()
 
 
 # =========================================================
@@ -62,9 +94,18 @@ class LivePlotCallback(BaseCallback):
         self.plot_interval = plot_interval
         self.current_episode_reward = 0
         self.current_episode_length = 0
+        self.adv_log = {"timesteps": [], "mean": [], "std": []}
 
     def _on_training_start(self):
         self.plotter.register_line(self.name, color=self.color)
+        self.plotter.register_advantage_line(self.name, color=self.color)  # ← add this
+
+    def _on_rollout_end(self):
+        advantages = self.model.rollout_buffer.advantages.flatten()
+        mean_adv = np.mean(advantages)
+        std_adv  = np.std(advantages)
+        self.plotter.update_advantages(self.name, self.num_timesteps, mean_adv, std_adv)
+        print(f"[Rollout {self.num_timesteps}] mean adv: {mean_adv:.4f}, std: {std_adv:.4f}")
 
     def _on_step(self):
         rewards = self.locals.get("rewards")
@@ -88,7 +129,7 @@ class LivePlotCallback(BaseCallback):
                 
 
         return True
-
+    
 
 # =========================================================
 # Random Policy Runner
