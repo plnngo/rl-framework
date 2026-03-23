@@ -10,7 +10,7 @@ from multi_target_env import MultiTargetEnv
 
 # --- ENV CREATION ------------------------------------------------------------
 
-def make_env(mode="search", n_targets=5, n_unknown_targets=100, seed=None):
+def make_env(mode="track", n_targets=5, n_unknown_targets=100, seed=None):
     """Utility function to create and return the environment."""
     # Always return the same setup for training and evaluation
     def _init():
@@ -90,7 +90,7 @@ def objective(trial, shared_plotter=None):
             "exploration_fraction", 0.5, 0.8
         ),
         "exploration_final_eps": trial.suggest_float(
-            "exploration_final_eps", 0.03, 0.1
+            "exploration_final_eps", 0.3, 0.7
         ),
 
         # --- Training schedule ---
@@ -124,7 +124,9 @@ def objective(trial, shared_plotter=None):
     trial_name = f"trial_{trial.number}"
     color = cm.get_cmap("tab20")(trial.number % 20) if shared_plotter else None
 
-    seeds = [42, 123, 321]
+    #seeds = [42, 123, 321]
+    seeds = [42]
+
     rewards = []
 
     for seed in seeds:

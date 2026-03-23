@@ -7,7 +7,7 @@ from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 import KalmanFilter
 from LSBatchFilter import Fx_cv_cont, batch_estimate_single_target, f_cv_cont, generate_truth_states, plot_errors_and_sigmas, process_estimates, f_ct_linear, Fx_ct_linear
-from deterministic_tracker import select_best_action_IG, select_best_action_pFOV
+from deterministic_tracker import select_best_action_IG, select_best_action_pFOV, select_best_action_sumTrace
 from multi_seed_training import RandomSeedEnv
 from multi_target_env import MultiTargetEnv
 import numpy as np
@@ -533,6 +533,8 @@ def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, det
             if random_policy:
                 #action = env.action_space.sample()
                 action = np.random.randint(0, 5, dtype=np.int64)
+            elif deterministic_policy and deterministic_policy_alternative:
+                action, best_ig, best_update = select_best_action_sumTrace(env, env.dt)
             elif deterministic_policy:
                 action, best_ig, best_update = select_best_action_pFOV(env, env.dt, fov)
             elif deterministic_policy_alternative:
@@ -547,7 +549,7 @@ def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, det
 
             # --- Step environment ---
             obs, reward, done, truncated, info = env.step(action)
-            if not info["action_mask"]["micro_track"][np.asarray(action).item()]:
+            if not info["action_mask"][np.asarray(action).item()]:
                 illegal_action = illegal_action + 1
             total_reward += reward
 
@@ -560,7 +562,7 @@ def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, det
                     exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
 
                     # if this is the last episode, store everything
-                    if not info["action_mask"]["micro_track"][np.asarray(action).item()]:
+                    if not info["action_mask"][np.asarray(action).item()]:
                         """ if info.get("invalid_action"):
                             illegalActs += 1 """
                         continue
@@ -1586,11 +1588,12 @@ def repositionEfficiency(values, time):
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 2
+    n_episodes = 100
     episode_efficiencies_pfov4 = []
     episode_efficiencies_pfov25 = []
     episode_efficiencies_pfov15 = []
     episode_efficiencies_pfov10 = []
+    episode_efficiencies_sumTrace = []
     episode_efficiencies_Random = []
     episode_efficiencies_Maskppo = []
     episode_efficiencies_Ppo = []
@@ -1612,6 +1615,7 @@ def efficiencyPlot():
     evaluate_times_pfov25 = []
     evaluate_times_pfov15 = []
     evaluate_times_pfov10 = []
+    evaluate_times_sumTrace = []
     evaluate_times_ig = []
     evaluate_times_random = []
     evaluate_times_Maskppo = []
@@ -1620,6 +1624,9 @@ def efficiencyPlot():
 
     error_episodespFOV = []
     total_error_episodespFOV = []
+
+    error_episodessumTrace = []
+    total_error_episodessumTrace = []
 
     error_episodesIG = []
     total_error_episodesIG = []
@@ -1735,7 +1742,7 @@ def efficiencyPlot():
         # Heuristic track pFOV
         start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
-            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8))
+            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8), deterministic_policy_alternative=False)
         evaluate_times_pfov10.append(time.perf_counter() - start)
 
         #tracks = constant_obs_all_targets(estimates=estimates)
@@ -1764,8 +1771,6 @@ def efficiencyPlot():
             total_error_episodespFOV.append(total_rmse_all_target)
 
 
-    
-
         efficiency_by_targetKLpFOV, t_by_target = computeEff(klCov, tracks, estimates)
 
         # ---- Average across targets ----
@@ -1773,7 +1778,46 @@ def efficiencyPlot():
         episode_efficiencies_pfov10.append(mean_eff_targets)
         env = last_env
 
-        """ # Heuristic track IG
+        # Heuristic track sumTrace
+        start = time.perf_counter()
+        det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
+            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8), deterministic_policy_alternative=True)
+        evaluate_times_sumTrace.append(time.perf_counter() - start)
+
+        #tracks = constant_obs_all_targets(estimates=estimates)
+        tracks = extract_tracks_from_log(last_episode_log)
+
+        errors_all_targets, total_trace_cov, klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc)
+        episode_error = 0
+        for tgt_error in errors_all_targets:
+            pos_error = tgt_error[:2, :]                  # (2, T_i)
+            sq_err = np.sum(pos_error**2, axis=0)          # (T_i,)
+            if len(sq_err) == 0:
+                continue    # target has not been tracked at all
+            rmse_target = np.sqrt(np.mean(sq_err))
+            episode_error = episode_error + rmse_target
+        if len(errors_all_targets)>0:
+            rmse_all_target = episode_error/len(errors_all_targets)
+            if not np.isnan(rmse_all_target): 
+                error_episodessumTrace.append(rmse_all_target)
+            else:
+                print("error is nan")
+
+        total_episode_trace_cov = sum(np.sum(arr) for arr in total_trace_cov)
+
+        if len(total_trace_cov)>0:
+            total_rmse_all_target = total_episode_trace_cov/len(total_trace_cov)
+            total_error_episodessumTrace.append(total_rmse_all_target)
+
+
+        efficiency_by_targetKLpFOV, t_by_target = computeEff(klCov, tracks, estimates)
+
+        # ---- Average across targets ----
+        mean_eff_targets = repositionEfficiency(efficiency_by_targetKLpFOV, t_by_target)
+        episode_efficiencies_sumTrace.append(mean_eff_targets)
+        env = last_env
+
+        # Heuristic track IG
         start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
         evaluate_times_ig.append(time.perf_counter() - start)
@@ -1804,12 +1848,12 @@ def efficiencyPlot():
 
         efficiency_by_targetKLig, t_by_target = computeEff(klCov, tracks, estimates)
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLig, t_by_target)
-        episode_efficiencies_ig.append(mean_eff_targets) """
+        episode_efficiencies_ig.append(mean_eff_targets)
 
-        #env = last_env
+        env = last_env
  
         # ****** Random policy ******
-        """ start = time.perf_counter()
+        start = time.perf_counter()
         random_rewards, exceedFOV_random, last_env, last_episode_log, illegal_actions_random = evaluate_agent_track(env, n_episodes=1, random_policy=True, deterministic_policy=False)
         evaluate_times_random.append(time.perf_counter() - start)
         tracks = extract_tracks_from_log(last_episode_log)
@@ -1839,14 +1883,14 @@ def efficiencyPlot():
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLRandom, t_by_target)
         episode_efficiencies_Random.append(mean_eff_targets)
  
-        env.reset() """
+        env = last_env
         #eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
     
         #plot_efficiency(efficiency_by_target, t_by_target)
         """ plot_efficiency(efficiency_by_targetKLHeuristic, t_by_target)
         plot_efficiency_all(efficiency_by_targetKLHeuristic, t_by_target) """
         # ****** Maskable PPO policy ******
-        """ maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE_singlepFOV", env=env)
+        """ maskppo_model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE_covTrace", env=env)
         start = time.perf_counter()
         maskppo_rewards, exceedFOV_maskppo, last_env, last_episode_log, illegal_actions_maskppo = evaluate_agent_track(env, model=maskppo_model, n_episodes=1, deterministic_policy=False, maskable=True)
         evaluate_times_Maskppo.append(time.perf_counter() - start)
@@ -1880,7 +1924,7 @@ def efficiencyPlot():
 
         env = last_env
         # ****** PPO policy ******
-        ppo_model = PPO.load("agents/ppo_track_trained_IEEE_singlepFOV", env=env)
+        ppo_model = PPO.load("agents/ppo_track_trained_IEEE_covTrace", env=env)
         start = time.perf_counter()
         ppo_rewards, exceedFOV_ppo, last_env, last_episode_log, illegal_actions_ppo = evaluate_agent_track(env, model=ppo_model, n_episodes=1, deterministic_policy=False)
         evaluate_times_Ppo.append(time.perf_counter() - start)
@@ -1914,7 +1958,7 @@ def efficiencyPlot():
 
         env = last_env
         # ****** DQN policy ******
-        dqn_model = DQN.load("agents/dqn_track_trained_IEEE_singlepFOV", env=env)
+        dqn_model = DQN.load("agents/dqn_track_trained_IEEE_covTrace", env=env)
         start = time.perf_counter()
         dqn_rewards, exceedFOV_dqn, last_env, last_episode_log, illegal_actions_dqn = evaluate_agent_track(env, model=dqn_model, n_episodes=1)
         evaluate_times_Dqn.append(time.perf_counter() - start)
@@ -1964,8 +2008,8 @@ def efficiencyPlot():
     episode_efficiencies_pfov25 = np.array(episode_efficiencies_pfov25)
     episode_efficiencies_pfov15 = np.array(episode_efficiencies_pfov15) """
     episode_efficiencies_pfov10 = np.array(episode_efficiencies_pfov10)
-    #episode_efficiencies_ig = np.array(episode_efficiencies_ig)
-    #episode_efficiencies_Random = np.array(episode_efficiencies_Random)
+    episode_efficiencies_ig = np.array(episode_efficiencies_ig)
+    episode_efficiencies_Random = np.array(episode_efficiencies_Random)
 
 
     """ mean_pfov4 = np.mean(episode_efficiencies_pfov4, axis=0)
@@ -1976,10 +2020,12 @@ def efficiencyPlot():
     std_pfov15 = np.std(episode_efficiencies_pfov15, axis=0) """
     mean_pfov10 = np.mean(episode_efficiencies_pfov10, axis=0)
     std_pfov10 = np.std(episode_efficiencies_pfov10, axis=0)
-    """ mean_ig = np.mean(episode_efficiencies_ig, axis=0)
-    std_ig = np.std(episode_efficiencies_ig, axis=0) """
-    """ mean_Random = np.mean(episode_efficiencies_Random, axis=0)
-    std_Random = np.std(episode_efficiencies_Random, axis=0) """
+    mean_sumTrace = np.mean(episode_efficiencies_sumTrace, axis=0)
+    std_sumTrace = np.std(episode_efficiencies_sumTrace, axis=0)
+    mean_ig = np.mean(episode_efficiencies_ig, axis=0)
+    std_ig = np.std(episode_efficiencies_ig, axis=0)
+    mean_Random = np.mean(episode_efficiencies_Random, axis=0)
+    std_Random = np.std(episode_efficiencies_Random, axis=0)
     mean_Maskppo = np.mean(episode_efficiencies_Maskppo, axis=0)
     std_Maskppo = np.std(episode_efficiencies_Maskppo, axis=0)
     mean_Ppo = np.mean(episode_efficiencies_Ppo, axis=0)
@@ -1991,11 +2037,14 @@ def efficiencyPlot():
     mean_time_pfov = np.mean(evaluate_times_pfov10)
     std_time_pfov  = np.std(evaluate_times_pfov10)
 
-    """ mean_time_ig   = np.mean(evaluate_times_ig)
-    std_time_ig    = np.std(evaluate_times_ig) """
+    mean_time_sumTrace = np.mean(evaluate_times_sumTrace)
+    std_time_sumTrace  = np.std(evaluate_times_sumTrace)
 
-    """ mean_time_random   = np.mean(evaluate_times_random)
-    std_time_random    = np.std(evaluate_times_random) """
+    mean_time_ig   = np.mean(evaluate_times_ig)
+    std_time_ig    = np.std(evaluate_times_ig)
+
+    mean_time_random   = np.mean(evaluate_times_random)
+    std_time_random    = np.std(evaluate_times_random)
 
     mean_time_Maskppo   = np.mean(evaluate_times_Maskppo)
     std_time_Maskppo    = np.std(evaluate_times_Maskppo)
@@ -2005,11 +2054,12 @@ def efficiencyPlot():
     std_time_Dqn    = np.std(evaluate_times_Dqn)
 
     print(f"evaluate_agent_track (pFOV) — mean: {mean_time_pfov:.4f}s, std: {std_time_pfov:.4f}s")
-    #print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s")
-    #print(f"evaluate_agent_track (Random)   — mean: {mean_time_random:.4f}s,   std: {std_time_random:.4f}s")
-    print(f"evaluate_agent_track (MaskPPO)   — mean: {mean_time_Maskppo:.4f}s,   std: {std_time_Maskppo:.4f}s")
+    print(f"evaluate_agent_track (sumTrace) — mean: {mean_time_sumTrace:.4f}s, std: {std_time_sumTrace:.4f}s")
+    print(f"evaluate_agent_track (IG)   — mean: {mean_time_ig:.4f}s,   std: {std_time_ig:.4f}s")
+    print(f"evaluate_agent_track (Random)   — mean: {mean_time_random:.4f}s,   std: {std_time_random:.4f}s")
+    """ print(f"evaluate_agent_track (MaskPPO)   — mean: {mean_time_Maskppo:.4f}s,   std: {std_time_Maskppo:.4f}s")
     print(f"evaluate_agent_track (PPO)   — mean: {mean_time_Ppo:.4f}s,   std: {std_time_Ppo:.4f}s")
-    print(f"evaluate_agent_track (DQN)   — mean: {mean_time_Dqn:.4f}s,   std: {std_time_Dqn:.4f}s")
+    print(f"evaluate_agent_track (DQN)   — mean: {mean_time_Dqn:.4f}s,   std: {std_time_Dqn:.4f}s") """
 
     error_episodespFOV = np.array(error_episodespFOV)
     total_error_episodespFOV = np.array(total_error_episodespFOV)
@@ -2017,14 +2067,28 @@ def efficiencyPlot():
     if len(error_episodespFOV)>0:
 
         mean_pos_error_all_episodes = sum(error_episodespFOV)/len(error_episodespFOV)
-        """ print("Mean of positional errors over all episodes pFOV " + str(mean_pos_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in error_episodespFOV], ddof=1)) """
+        print("Mean of positional errors over all episodes pFOV " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodespFOV], ddof=1))
     if len(total_error_episodespFOV)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodespFOV)/len(total_error_episodespFOV)
         print("Mean of covariance trace over all episodes pFOV " + str(mean_pos_total_error_all_episodes) + " +- ")
         print(np.std([np.mean(arr) for arr in total_error_episodespFOV], ddof=1))
 
-    """ error_episodesIG = np.array(error_episodesIG)
+        
+    error_episodessumTrace = np.array(error_episodessumTrace)
+    total_error_episodessumTrace = np.array(total_error_episodessumTrace)
+
+    if len(error_episodessumTrace)>0:
+
+        mean_pos_error_all_episodes = sum(error_episodessumTrace)/len(error_episodessumTrace)
+        print("Mean of positional errors over all episodes sumTrace " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodessumTrace], ddof=1))
+    if len(total_error_episodessumTrace)>0:
+        mean_pos_total_error_all_episodes = sum(total_error_episodessumTrace)/len(total_error_episodessumTrace)
+        print("Mean of covariance trace over all episodes sumTrace " + str(mean_pos_total_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in total_error_episodessumTrace], ddof=1))
+
+    error_episodesIG = np.array(error_episodesIG)
     total_error_episodesIG = np.array(total_error_episodesIG)
     if len(error_episodesIG)>0:
 
@@ -2034,9 +2098,9 @@ def efficiencyPlot():
     if len(total_error_episodesIG)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesIG)/len(total_error_episodesIG)
         print("Mean of covariance trace over all episodes IG " + str(mean_pos_total_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in total_error_episodesIG], ddof=1)) """
+        print(np.std([np.mean(arr) for arr in total_error_episodesIG], ddof=1))
 
-    """ error_episodesRandom = np.array(error_episodesRandom)
+    error_episodesRandom = np.array(error_episodesRandom)
     total_error_episodesRandom = np.array(total_error_episodesRandom)
     if len(error_episodesRandom)>0:
 
@@ -2046,15 +2110,15 @@ def efficiencyPlot():
     if len(total_error_episodesRandom)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesRandom)/len(total_error_episodesRandom)
         print("Mean of covariance trace over all episodes Random " + str(mean_pos_total_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in total_error_episodesRandom], ddof=1)) """
+        print(np.std([np.mean(arr) for arr in total_error_episodesRandom], ddof=1))
 
-    error_episodesMaskppo = np.array(error_episodesMaskppo)
+    """ error_episodesMaskppo = np.array(error_episodesMaskppo)
     total_error_episodesMaskppo = np.array(total_error_episodesMaskppo)
     if len(error_episodesMaskppo)>0:
 
         mean_pos_error_all_episodes = sum(error_episodesMaskppo)/len(error_episodesMaskppo)
-        """ print("Mean of positional errors over all episodes MaskPPO " + str(mean_pos_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in error_episodesMaskppo], ddof=1)) """
+        print("Mean of positional errors over all episodes MaskPPO " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodesMaskppo], ddof=1))
     if len(total_error_episodesMaskppo)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesMaskppo)/len(total_error_episodesMaskppo)
         print("Mean of covariance trace over all episodes MaskPPO " + str(mean_pos_total_error_all_episodes) + " +- ")
@@ -2065,8 +2129,8 @@ def efficiencyPlot():
     if len(error_episodesPpo)>0:
 
         mean_pos_error_all_episodes = sum(error_episodesPpo)/len(error_episodesPpo)
-        """ print("Mean of positional errors over all episodes PPO " + str(mean_pos_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in error_episodesPpo], ddof=1)) """
+        print("Mean of positional errors over all episodes PPO " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodesPpo], ddof=1))
     if len(total_error_episodesPpo)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesPpo)/len(total_error_episodesPpo)
         print("Mean of covariance trace over all episodes PPO " + str(mean_pos_total_error_all_episodes) + " +- ")
@@ -2077,12 +2141,12 @@ def efficiencyPlot():
     if len(error_episodesDqn)>0:
 
         mean_pos_error_all_episodes = sum(error_episodesDqn)/len(error_episodesDqn)
-        """ print("Mean of positional errors over all episodes DQN " + str(mean_pos_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in error_episodesDqn], ddof=1)) """
+        print("Mean of positional errors over all episodes DQN " + str(mean_pos_error_all_episodes) + " +- ")
+        print(np.std([np.mean(arr) for arr in error_episodesDqn], ddof=1))
     if len(total_error_episodesDqn)>0:
         mean_pos_total_error_all_episodes = sum(total_error_episodesDqn)/len(total_error_episodesDqn)
         print("Mean of covariance trace over all episodes DQN " + str(mean_pos_total_error_all_episodes) + " +- ")
-        print(np.std([np.mean(arr) for arr in total_error_episodesDqn], ddof=1))
+        print(np.std([np.mean(arr) for arr in total_error_episodesDqn], ddof=1)) """
 
     plt.figure()
 
@@ -2098,11 +2162,14 @@ def efficiencyPlot():
     plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(2.0e-8)")
     plt.fill_between(timesteps, mean_pfov10 - std_pfov10, mean_pfov10 + std_pfov10, alpha=0.3)
 
-    """ plt.plot(timesteps, mean_ig, label="Heuristic IG")
-    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3) """
+    plt.plot(timesteps, mean_sumTrace, label="Heuristic sumTrace")
+    plt.fill_between(timesteps, mean_sumTrace - std_sumTrace, mean_sumTrace + std_sumTrace, alpha=0.3)
 
-    """ plt.plot(timesteps, mean_Random, label="Random")
-    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3) """
+    plt.plot(timesteps, mean_ig, label="Heuristic IG")
+    plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3)
+
+    plt.plot(timesteps, mean_Random, label="Random")
+    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3)
 
     """ plt.plot(timesteps, mean_Maskppo, label="MaskPPO")
     plt.fill_between(timesteps, mean_Maskppo - std_Maskppo, mean_Maskppo + std_Maskppo, alpha=0.3)

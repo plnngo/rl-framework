@@ -222,11 +222,8 @@ class MultiTargetEnv(gym.Env):
         else:
             raise ValueError(f"Invalid macro action: {macro}")
 
-    def action_masks(self) -> np.ndarray:
-        """
-        Return a boolean array where True = valid action, False = invalid.
-        Required by MaskablePPO.
-        """
+    """ def action_masks(self) -> np.ndarray:
+
         if self.mode == "search":
             # All search grid cells are always valid
             return np.ones(self.n_actions, dtype=bool)
@@ -240,7 +237,7 @@ class MultiTargetEnv(gym.Env):
             # Next max_targets actions = track (valid if known)
             mask = np.ones(self.n_actions, dtype=bool)
             mask[self.n_grid_cells:] = self.known_mask
-            return mask
+            return mask """
         
     def step(self, action):
         macro, micro_search, micro_track = self.decode_action(action)
@@ -367,7 +364,7 @@ class MultiTargetEnv(gym.Env):
             else:
                 invalid_action = True
                 # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
-                info = {"invalid_action": invalid_action, "action_mask": self.get_action_mask(), "lost_target": lost_targets}
+                info = {"invalid_action": invalid_action, "action_mask": self.action_masks(), "lost_target": lost_targets}
                 # Termination
                 done = self.step_count >= self.max_steps
                 return obs, -10.0, done, False, info
@@ -415,7 +412,7 @@ class MultiTargetEnv(gym.Env):
                 "micro": micro,
                 "target_id": target_id,
                 "reward_info_gain": total_iG,
-                "action_mask": self.get_action_mask(),
+                "action_mask": self.action_masks(),
                 "lost_target": lost_targets,
                 "n_known": np.sum(self.known_mask),  # Track this!
                 "n_lost_this_step": len(lost_targets),
@@ -513,7 +510,7 @@ class MultiTargetEnv(gym.Env):
         info = {"macro": macro, "micro": micro, 
                 "target_id": target_id, 
                 "reward_info_gain": total_iG, 
-                "action_mask": self.get_action_mask(), 
+                "action_mask": self.action_masks(), 
                 "lost_target": lost_targets, 
                 "episode_detection_reward": self.episode_detection_reward,
                 "episode_roi_reward": self.episode_roi_reward,
@@ -565,13 +562,9 @@ class MultiTargetEnv(gym.Env):
         Q = np.eye(self.d_state) * 0.0
         return {"id": target_id, "x": x0_full, "P": P0, "Q": Q}
     
-    def get_action_mask(self):
-        """Return dictionary of valid discrete actions."""
-        mask = {
-            "macro": np.ones(2, dtype=bool),  # always can choose search or track
-            "micro_search": np.ones(self.n_grid_cells, dtype=bool),  # all grid cells valid
-            "micro_track": self.known_mask.copy()  # only known targets valid
-        }
+    def action_masks(self):
+        mask = np.zeros(self.max_targets, dtype=bool)
+        mask[:self.n_targets] = True
         return mask
 
     def _get_obs(self, target_id=None):
