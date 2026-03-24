@@ -28,7 +28,7 @@ def make_env(mode="track", n_targets=5, n_unknown_targets=100, seed=None):
 
 # --- TRAINING LOOP -----------------------------------------------------------
 
-def train_dqn(params, trial_name, total_timesteps=50_000, plotter=None, color=None, seed=None):
+def train_dqn(params, trial_name, total_timesteps=80_000, plotter=None, color=None, seed=None):
     """Train a DQN agent with given parameters."""
     env = make_env(seed=seed)
 
@@ -133,7 +133,7 @@ def objective(trial, shared_plotter=None):
         model = train_dqn(
             params,
             trial_name=f"{trial_name}_seed{seed}",
-            total_timesteps=50_000,
+            total_timesteps=40_000,
             plotter=shared_plotter,
             color=color,
             seed=seed,

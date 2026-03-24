@@ -1,4 +1,5 @@
 import math
+import time
 import gymnasium as gym
 import numpy as np
 from math import sqrt
@@ -284,6 +285,8 @@ class MultiTargetEnv(gym.Env):
 
         trace_reward = 0
         # propagate all known targets
+        start = time.perf_counter()
+            
         for tgt in self.targets.copy():
 
             idx = tgt['id']  # global index
@@ -341,7 +344,7 @@ class MultiTargetEnv(gym.Env):
                 else:
                     prob_reward += prob
 
-
+        print(time.perf_counter() - start)
         # propagate unknowns
         for utgt in self.unknown_targets:
 
