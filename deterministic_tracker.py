@@ -65,10 +65,10 @@ def select_best_action_pFOV(env, dt=None, fov=4):
         prob_this_pred = compute_fov_prob_single(fov, x_pred, P_pred)
         prob_this_upd  = compute_fov_prob_single(fov, x_upd,  P_upd)
         prob = total_pred_prob - prob_this_pred + prob_this_upd
-        """ print(f"traceUpdated={traceUpdated:.4f}, "
-            f"trace_diff={(np.trace(P_pred) - np.trace(P_upd)):.4f}, "
-            f"trace(P_pred)={np.trace(P_pred):.4f}, "
-            f"trace(P_upd)={np.trace(P_upd):.4f}") """
+        print(f"probUpdated={prob:.10f}, "
+            f"prob_diff={(prob_this_pred - prob_this_upd):.10f}, "
+            f"pred={prob_this_pred:.10f}, "
+            f"upd={prob_this_upd:.10f}")
 
         # Keep the best
         if prob > highest_prob:

@@ -19,7 +19,7 @@ from train_agent import SharedLivePlot, LivePlotCallback
 
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 60_000
+total_timesteps = 10_000
 save_dir = "macro_results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -61,11 +61,11 @@ class MacroRandomSeedEnv(gym.Env):
             n_targets=n_targets, n_unknown_targets=n_unknown_targets,
             seed=seed, mode="track"
         )
-        search_agent = PPO.load("agents/ppo_search_trained_IEEE", env=env_search)
+        search_agent = PPO.load("agents/ppo_search_trained_slowTargets_obsSpace4Channels", env=env_search)
         if tracker == "dqn":
-            track_agent = DQN.load("agents/dqn_track_trained_IEEE", env=env_track)
+            track_agent = DQN.load("agents/dqn_track_trained_IEEE_covTrace", env=env_track)
         else:
-            track_agent = MaskablePPO.load("agents/maskableppo_track_trained_IEEE", env=env_track)
+            track_agent = MaskablePPO.load("agents/maskableppo_track_trained_IEEE_covTrace", env=env_track)
 
         return MacroEnv(
             n_targets=n_targets,

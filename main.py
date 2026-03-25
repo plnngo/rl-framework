@@ -549,7 +549,6 @@ def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, det
 
 
             # --- Step environment ---
-        
             obs, reward, done, truncated, info = env.step(action)
 
             if not info["action_mask"][np.asarray(action).item()]:
@@ -1591,7 +1590,7 @@ def repositionEfficiency(values, time):
 def efficiencyPlot():
     n_targets = 5
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=42, mode="track")
-    n_episodes = 10
+    n_episodes = 100
     episode_efficiencies_pfov4 = []
     episode_efficiencies_pfov25 = []
     episode_efficiencies_pfov15 = []
@@ -1602,7 +1601,8 @@ def efficiencyPlot():
     episode_efficiencies_Ppo = []
     episode_efficiencies_Dqn = []
 
-
+    illegalActionsPPO = 0
+    illegalActionsDQN = 0
 
     episode_efficiencies_ig = []
     sigma_theta = np.deg2rad(1.0 / 3600.0)  # 1 arcsec bearing noise
@@ -1745,7 +1745,8 @@ def efficiencyPlot():
         # Heuristic track pFOV
         start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = \
-            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8), deterministic_policy_alternative=False)
+            evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(1.0e-6), deterministic_policy_alternative=False)
+            #evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=True, fov=np.sqrt(2.0e-8), deterministic_policy_alternative=False)
         evaluate_times_pfov10.append(time.perf_counter() - start)
 
         #tracks = constant_obs_all_targets(estimates=estimates)
@@ -1821,7 +1822,7 @@ def efficiencyPlot():
         env = last_env
 
         # Heuristic track IG
-        start = time.perf_counter()
+        """ start = time.perf_counter()
         det_rewards, exceedFOV_det, last_env, last_episode_log, illegal_actions_det = evaluate_agent_track(env, n_episodes=1, random_policy=False, deterministic_policy=False, deterministic_policy_alternative=True)
         evaluate_times_ig.append(time.perf_counter() - start)
         tracks = extract_tracks_from_log(last_episode_log)
@@ -1884,7 +1885,7 @@ def efficiencyPlot():
         efficiency_by_targetKLRandom, t_by_target = computeEff(klCov, tracks, estimates)
         # ---- Average across targets ----
         mean_eff_targets = repositionEfficiency(efficiency_by_targetKLRandom, t_by_target)
-        episode_efficiencies_Random.append(mean_eff_targets)
+        episode_efficiencies_Random.append(mean_eff_targets) """
  
         env = last_env
         #eff_sum = np.sum(list(efficiency_by_targetKLHeuristic.values()), axis=0)
@@ -1931,6 +1932,7 @@ def efficiencyPlot():
         start = time.perf_counter()
         ppo_rewards, exceedFOV_ppo, last_env, last_episode_log, illegal_actions_ppo = evaluate_agent_track(env, model=ppo_model, n_episodes=1, deterministic_policy=False)
         evaluate_times_Ppo.append(time.perf_counter() - start)
+        illegalActionsPPO += sum(illegal_actions_ppo)
         tracks = extract_tracks_from_log(last_episode_log)
         errors_all_targets, total_trace_cov, klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc) 
         episode_error = 0
@@ -1965,6 +1967,7 @@ def efficiencyPlot():
         start = time.perf_counter()
         dqn_rewards, exceedFOV_dqn, last_env, last_episode_log, illegal_actions_dqn = evaluate_agent_track(env, model=dqn_model, n_episodes=1)
         evaluate_times_Dqn.append(time.perf_counter() - start)
+        illegalActionsDQN += sum(illegal_actions_dqn)
         tracks = extract_tracks_from_log(last_episode_log)
         errors_all_targets, total_trace_cov, klX, klCov = estimateAndPlot(tracks, all_target_states, last_env, all_meas, R, obsFunc) 
         episode_error = 0
@@ -2063,6 +2066,9 @@ def efficiencyPlot():
     print(f"evaluate_agent_track (MaskPPO)   — mean: {mean_time_Maskppo:.4f}s,   std: {std_time_Maskppo:.4f}s")
     print(f"evaluate_agent_track (PPO)   — mean: {mean_time_Ppo:.4f}s,   std: {std_time_Ppo:.4f}s")
     print(f"evaluate_agent_track (DQN)   — mean: {mean_time_Dqn:.4f}s,   std: {std_time_Dqn:.4f}s")
+    print(f"evaluate_agent_track illegal action (PPO)   — mean: {illegalActionsPPO:.4f}actions")
+    print(f"evaluate_agent_track illegal action (DQN)   — mean: {illegalActionsDQN:.4f}actions")
+
 
     error_episodespFOV = np.array(error_episodespFOV)
     total_error_episodespFOV = np.array(total_error_episodespFOV)
@@ -2162,7 +2168,7 @@ def efficiencyPlot():
     plt.plot(timesteps, mean_pfov15, label="Heuristic pFOV15")
     plt.fill_between(timesteps, mean_pfov15 - std_pfov15, mean_pfov15 + std_pfov15, alpha=0.3) """
 
-    plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(2.0e-8)")
+    """ plt.plot(timesteps, mean_pfov10, label="Heuristic pFOV sqrt(2.0e-8)")
     plt.fill_between(timesteps, mean_pfov10 - std_pfov10, mean_pfov10 + std_pfov10, alpha=0.3)
 
     plt.plot(timesteps, mean_sumTrace, label="Heuristic sumTrace")
@@ -2172,7 +2178,7 @@ def efficiencyPlot():
     plt.fill_between(timesteps, mean_ig - std_ig, mean_ig + std_ig, alpha=0.3)
 
     plt.plot(timesteps, mean_Random, label="Random")
-    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3)
+    plt.fill_between(timesteps, mean_Random - std_Random, mean_Random + std_Random, alpha=0.3) """
 
     plt.plot(timesteps, mean_Maskppo, label="MaskPPO")
     plt.fill_between(timesteps, mean_Maskppo - std_Maskppo, mean_Maskppo + std_Maskppo, alpha=0.3)
