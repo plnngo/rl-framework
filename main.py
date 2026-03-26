@@ -561,7 +561,8 @@ def evaluate_agent_track(env, model=None, n_episodes=1, random_policy=False, det
 
             if ep == n_episodes - 1:
                 for tgt in env.targets:
-                    exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
+                    #exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
+                    x, P = extract_target_state_cov(tgt["id"], env)
 
                     # if this is the last episode, store everything
                     if not info["action_mask"][np.asarray(action).item()]:
@@ -759,7 +760,8 @@ def plot_violin(results_dict, ylabel="Episode Reward"):
         "Maskable PPO": "grey",
         "0.95": "blue",
         "0.5": "orange",
-        "0.1": "red"
+        "0.1": "red",
+        "HeuristicHeuristic": "black" 
     }
     
     data = []
