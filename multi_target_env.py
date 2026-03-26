@@ -93,11 +93,11 @@ class MultiTargetEnv(gym.Env):
             #self.obs_dim_per_target = 3
 
             #obs_len = self.init_n_target * self.obs_dim_per_target
-            obs_len = self.max_targets * self.obs_dim_per_target
+            #obs_len = self.max_targets * self.obs_dim_per_target
             self.observation_space = gym.spaces.Box(
-                low=-1.0, 
-                high=1.0,
-                shape=(obs_len,),
+                low=0.0, 
+                high=np.inf,
+                shape=(self.max_targets, self.obs_dim_per_target),
                 dtype=np.float32
             )
 
@@ -566,9 +566,9 @@ class MultiTargetEnv(gym.Env):
         return {"id": target_id, "x": x0_full, "P": P0, "Q": Q}
     
     def action_masks(self):
-        mask = np.zeros(self.max_targets, dtype=bool)
-        mask[:self.n_targets] = True
-        return mask
+        """ mask = np.zeros(self.max_targets, dtype=bool)
+        mask[:self.n_targets] = True """
+        return self.known_mask
 
     def _get_obs(self, target_id=None):
         """Flatten all target states and covariances into one observation vector."""
@@ -621,7 +621,7 @@ class MultiTargetEnv(gym.Env):
         all_targets = [by_id[k] for k in sorted(by_id)]
 
             
-        obs_list = []
+        """ obs_list = []
 
         for i, tgt in enumerate(all_targets):
             x, y, vx, vy = tgt["x"]
@@ -637,7 +637,21 @@ class MultiTargetEnv(gym.Env):
                 #known               # Is this target tracked? (NEW!)
             ])
         
-        return np.array(obs_list, dtype=np.float32)
+        return np.array(obs_list, dtype=np.float32) """
+        features = []
+
+        for tgt in all_targets:
+            trace = np.trace(tgt["P"])
+            p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+            known = 1.0 if self.known_mask[tgt["id"]] else 0.0
+
+            features.append([
+                trace * known,
+                p_fov * known
+            ])
+
+        obs = np.stack(features, axis=0)  # shape: (num_targets, 2)
+        return obs.astype(np.float32)
         
     def sample_track_action(self):
         """Sample a valid tracking action from currently known targets."""
