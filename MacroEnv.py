@@ -5,7 +5,7 @@ import copy
 
 from sb3_contrib import MaskablePPO
 
-from deterministic_tracker import select_best_action_pFOV
+from deterministic_tracker import select_best_action_pFOV, select_best_action_sumTrace
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 def unwrap_env(env):
@@ -238,7 +238,7 @@ class MacroEnv(gym.Env):
         else:
             obs = real_track_env.obs
             if self.heuristicTracker:
-                micro_action, best_ig, best_update = select_best_action_pFOV(real_track_env, real_track_env.dt)
+                micro_action, best_ig, best_update = select_best_action_sumTrace(real_track_env, real_track_env.dt)
             else:
                 if isinstance(self.track_agent, MaskablePPO):
                     action_masks = real_track_env.action_masks()
@@ -260,7 +260,7 @@ class MacroEnv(gym.Env):
         next_obs = self._get_obs()
         self.obs = next_obs
         macro_reward = sum(next_obs)
-        if info["lost_target"]:
+        """ if info["lost_target"]:
             self.step_count += 1
 
             reward = -100.0   
@@ -273,7 +273,7 @@ class MacroEnv(gym.Env):
                 "action_mask": self.get_action_mask()
             }
 
-            return next_obs, reward, done, truncated, info
+            return next_obs, reward, done, truncated, info """
         done = self.step_count >= self.max_steps
         return next_obs, macro_reward, done, truncated, info
 

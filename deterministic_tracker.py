@@ -149,8 +149,8 @@ def select_best_action_sumTrace(env, dt=None, fov=4):
         x_upd, P_upd = MultiTargetEnv.ekf_update(x_pred, P_pred, env.R, obsFunc)
        
         # Swap out this target's predicted prob for its updated prob
-        prob_this_pred = compute_fov_prob_single(fov, x_pred, P_pred)
-        prob_this_upd  = compute_fov_prob_single(fov, x_upd,  P_upd)
+        """ prob_this_pred = compute_fov_prob_single(fov, x_pred, P_pred)
+        prob_this_upd  = compute_fov_prob_single(fov, x_upd,  P_upd) """
         #prob = total_pred_prob - prob_this_pred + prob_this_upd
         traceUpdated = trace - np.trace(P_pred) + np.trace(P_upd)
         """ print(f"traceUpdated={traceUpdated:.4f}, "

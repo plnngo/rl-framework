@@ -221,7 +221,7 @@ def main():
     # DQN
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: RandomSeedEnv(seeds, mode=mode)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # PPO
     color_ppo = cm.get_cmap("tab10")(0)
@@ -230,7 +230,7 @@ def main():
 
     color_mppo = cm.get_cmap("tab10")(3)
     env_mppo = DummyVecEnv([make_masked_env])
-    #train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
+    train_agent("MaskablePPO", env_mppo, shared_plotter, color_mppo, total_timesteps, save_dir)
 
     # Random Policy
     color_rand = cm.get_cmap("tab10")(2)

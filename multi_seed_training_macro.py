@@ -65,7 +65,7 @@ class MacroRandomSeedEnv(gym.Env):
         if tracker == "dqn":
             track_agent = DQN.load("agents/dqn_track_trained_IEEE_covTrace", env=env_track)
         else:
-            track_agent = MaskablePPO.load("agents/maskableppo_track_trained_IEEE_covTrace", env=env_track)
+            track_agent = MaskablePPO.load("agents/maskableppo_track_trained_IEEE_obsSpace", env=env_track)
 
         return MacroEnv(
             n_targets=n_targets,
