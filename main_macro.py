@@ -7,8 +7,9 @@ from tqdm import trange
 from LSBatchFilter import generate_truth_states
 import MCTSenv
 from MacroEnv import MacroEnv, _sync_envs
+from deterministic_macro import select_best_action_pFOV
 from deterministic_tracker import select_best_macro_action
-from main import analyse_tracking_task, estimateAndPlot, extract_tracks_from_log, plot_detection_bar_chart, plot_means_lost_targets, plot_violin
+from main import analyse_tracking_task, estimateAndPlot, extract_target_state_cov, extract_tracks_from_log, plot_detection_bar_chart, plot_means_lost_targets, plot_violin
 from multi_seed_training_macro import MacroRandomSeedEnv
 from multi_target_env import MultiTargetEnv
 
@@ -230,7 +231,8 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
             if isinstance(model, MCTSenv.MCTS):
                 obs, reward, done, truncated, info, action, micro = run_mcts_step(env, model, obs)
             elif deterministic_policy:
-                action = select_best_macro_action(env)
+                #action = select_best_macro_action(env)
+                action = select_best_action_pFOV(env, dt=1.0, boundary=1) #boundary=np.sqrt(1.0e-6)
                 obs, reward, done, truncated, info = env.step(action)
 
             else:
@@ -259,7 +261,8 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
                         if info.get("invalid_action"):
                             illegalActs += 1
                         continue
-                    exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
+                    #exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
+                    x, P = extract_target_state_cov(tgt["id"], env)
    
                     # if this is the last episode, store everything
                     if tgt["id"] in info["target_id"]:
@@ -476,13 +479,33 @@ def plot_task_log(task_log, title="Action Timeline"):
 
 def main():
     seeds = [42, 123, 321]
-    n_episodes = 100
+    n_episodes = 2
     n_targets = 5
     n_unknown_targets =100
 
     """ envMcts = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)))
     mcts = MCTSenv.MCTS(env=envMcts, rollout_depth=5, gamma=0.95)
     rewardsMcts, detection_countMcts, exceedFOVMcts, last_envMcts, last_episode_logMcts, knownMcts, last_tasks_logMcts = evaluate_agent_macro(seeds=seeds, env=envMcts, model=mcts, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)  """
+
+    # Heuristic tracker
+    tracker = "heuristic"
+    envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True, tracker=tracker)
+    rewardsHeuristicHeuristic, detection_countHeuristicHeuristic, exceedFOVHeuristicHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristicHeuristic, last_tasks_logHeuristicHeuristic, illegal_heuristicHeuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    print("Reward - Heuristic macro - Heuristic tracker")
+    print(sum(rewardsHeuristicHeuristic)/len(rewardsHeuristicHeuristic))
+    print(np.std([np.mean(arr) for arr in rewardsHeuristicHeuristic], ddof=1))
+    print("Detections")
+    print(sum(detection_countHeuristicHeuristic)/len(detection_countHeuristicHeuristic))
+    print(np.std([np.mean(arr) for arr in detection_countHeuristicHeuristic], ddof=1))
+    print("Lost")
+    print(sum(exceedFOVHeuristicHeuristic)/len(exceedFOVHeuristicHeuristic))
+    print(np.std([np.mean(arr) for arr in exceedFOVHeuristicHeuristic], ddof=1))
+    print("Known")
+    print(sum(knownHeuristicHeuristic)/len(knownHeuristicHeuristic))
+    print(np.std([np.mean(arr) for arr in knownHeuristicHeuristic], ddof=1))
+    print("Illegal")
+    print(sum(illegal_heuristicHeuristic)/len(illegal_heuristicHeuristic))
+    print(np.std([np.mean(arr) for arr in illegal_heuristicHeuristic], ddof=1))
 
     # Mask PPO tracker
     tracker = "maskppo"
@@ -522,7 +545,7 @@ def main():
     print(sum(illegal_random)/len(illegal_random))
     print(np.std([np.mean(arr) for arr in illegal_random], ddof=1))
 
-    envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker=tracker)
+    """ envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker=tracker)
     ppo_model = PPO.load("agents/ppo_macro_trained_dqn_track", env=envPPO)
     rewardsPPO, detection_countPPO, exceedFOVPPO, last_envPPO, last_episode_logPPO, knownPPO, last_tasks_logPPO, illegal_ppo = evaluate_agent_macro(seeds=seeds, env=envPPO, model=ppo_model, n_episodes=n_episodes, random_policy=False, deterministic_policy=False)
     print("Reward - PPO macro - Mask PPO tracker")
@@ -558,16 +581,17 @@ def main():
     print(np.std([np.mean(arr) for arr in knownDQN], ddof=1))
     print("Illegal")
     print(sum(illegal_dqn)/len(illegal_dqn))
-    print(np.std([np.mean(arr) for arr in illegal_dqn], ddof=1))
+    print(np.std([np.mean(arr) for arr in illegal_dqn], ddof=1)) """
 
     #plot_pareto(detection_countMcts, exceedFOVMcts)
 
     # ****** Plot reward distributions ******
     reward_results = {
         "Random": rewardsRandom,
-        "PPO": rewardsPPO,
+        #"PPO": rewardsPPO,
         "Heuristic": rewardsHeuristic,
-        "DQN": rewardsDQN
+        "HeuristicHeuristic": rewardsHeuristicHeuristic
+        #"DQN": rewardsDQN
         #"MCTS": rewardsMcts
     }
     plot_violin(reward_results, ylabel="Episode Reward")
@@ -575,36 +599,39 @@ def main():
     # ****** Plot detection distributions ******
     detection_results = {
         "Random": detection_countRandom,
-        "PPO": detection_countPPO,
+        #"PPO": detection_countPPO,
         "Heuristic": detection_countHeuristic,
-        "DQN": detection_countDQN,
+        "HeuristicHeuristic": detection_countHeuristicHeuristic
+        #"DQN": detection_countDQN,
         #"MCTS": detection_countMcts
     }
     plot_violin(detection_results, ylabel="Number of Detections")
 
     # ****** Plot illegal actions distributions ******
-    illegal_results = {
+    """ illegal_results = {
         "Random": illegal_random,
         "PPO": illegal_ppo,
         "Heuristic": illegal_heuristic,
         "DQN": illegal_dqn,
         #"MCTS": detection_countMcts
     }
-    plot_violin(illegal_results, ylabel="Number of Illegal Actions")
+    plot_violin(illegal_results, ylabel="Number of Illegal Actions") """
 
     # ****** Plot total target lost ******
     labels = ["PPO", "DQN", "Random", "Heuristic"]
     #plot_means_lost_targets(ppo=exceedFOVPPO, knownPPO=knownPPO, dqn=[], knownDQN=[], random=exceedFOVRandom, knownRandom=knownRandom, det=[], knowndet=[])
-    plot_means_lost_targets(ppo=exceedFOVPPO, knownPPO=knownPPO, dqn=exceedFOVDQN, knownDQN=knownDQN, random=exceedFOVRandom, knownRandom=knownRandom, det=exceedFOVHeuristic, knowndet=knownHeuristic, labels=labels)
+    #plot_means_lost_targets(ppo=exceedFOVPPO, knownPPO=knownPPO, dqn=exceedFOVDQN, knownDQN=knownDQN, random=exceedFOVRandom, knownRandom=knownRandom, det=exceedFOVHeuristic, knowndet=knownHeuristic, labels=labels)
 
     # ****** Plot time spent on task ******
     plot_task_log(last_tasks_logRandom, title="Random Policy - Action Timeline")
-    plot_task_log(last_tasks_logPPO, title="PPO - Action Timeline")
-    plot_task_log(last_tasks_logDQN, title="DQN - Action Timeline")
+    """ plot_task_log(last_tasks_logPPO, title="PPO - Action Timeline")
+    plot_task_log(last_tasks_logDQN, title="DQN - Action Timeline") """
     plot_task_log(last_tasks_logHeuristic, title="Heuristic - Action Timeline")
+    plot_task_log(last_tasks_logHeuristicHeuristic, title="HeuristicHeuristic - Action Timeline")
+
 
     # DQN tracker
-    tracker = "dqn"
+    """ tracker = "dqn"
     envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker=tracker)
     rewardsHeuristic, detection_countHeuristic, exceedFOVHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristic, last_tasks_logHeuristic, illegal_heuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
     print("Reward - Heuristic macro - DQN tracker")
@@ -857,7 +884,7 @@ def main():
     plot_task_log(last_tasks_logRandom, title="Random Policy - Action Timeline")
     plot_task_log(last_tasks_logPPO, title="PPO - Action Timeline")
     plot_task_log(last_tasks_logDQN, title="DQN - Action Timeline")
-    plot_task_log(last_tasks_logHeuristic, title="Heuristic - Action Timeline")
+    plot_task_log(last_tasks_logHeuristic, title="Heuristic - Action Timeline") """
 
 def mctsMain():
     seeds = [42, 123, 321]
@@ -1081,9 +1108,9 @@ def mctsMain():
     plot_task_log(last_tasks_logMcts05, title="Gamma 0.5 - Action Timeline")
     plot_task_log(last_tasks_logMcts01, title="Gamma 0.1 - Action Timeline")
 if __name__ == "__main__":
-    #main()
+    main()
     #rmsePlot()
-    mctsMain()
+    #mctsMain()
 
 
     
