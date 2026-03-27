@@ -191,6 +191,24 @@ class MacroEnv(gym.Env):
         _sync_envs(self, real_search_env)
         _sync_envs(self, real_track_env)
 
+        # Compute macro reward
+        probSum = 0
+        for tgt in self.targets:
+            idx = tgt['id']  # global index
+            model = self.motion_model[idx]
+            param = self.motion_params[idx]
+
+            predState, predCov = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=real_search_env.dt, rng=self.rng, motion_model=model, motion_param=param)
+            prob = compute_fov_prob_single(1, predState, predCov)
+            probSum += prob
+
+        if probSum == sum(self.known_mask) and macro_action == 0:
+            macro_reward = 1
+        elif probSum != sum(self.known_mask) and macro_action == 1:
+            macro_reward = 1
+        else:
+            macro_reward = 0
+
         # choose agent
         if macro_action == 0:
             obs = real_search_env.obs
@@ -256,6 +274,10 @@ class MacroEnv(gym.Env):
 
             # sync back into base env """
             _sync_envs(real_track_env, self)
+        
+        
+
+
         
         next_obs = self._get_obs()
         self.obs = next_obs
