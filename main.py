@@ -1211,7 +1211,7 @@ def constant_obs_all_targets(estimates=None):
 
     return tracks
 
-def extract_tracks_from_log(last_episode_log, n_targets=5):
+def extract_tracks_from_log(last_episode_log):
     """
     Convert last_episode_log into per-target time-ordered tracks.
 
@@ -1220,8 +1220,14 @@ def extract_tracks_from_log(last_episode_log, n_targets=5):
             { "t": timestep, "state": ..., "cov": ..., "exceedFOV": ... }
     """
 
-    # Prepare empty track containers
-    tracks = {tid: [] for tid in range(n_targets)}
+    # Discover all target IDs present in the log
+    all_target_ids = set()
+    for snapshot in last_episode_log.values():
+        if isinstance(snapshot, dict):
+            all_target_ids.update(snapshot.keys())
+
+    # Prepare empty track containers for discovered targets
+    tracks = {tid: [] for tid in all_target_ids}
 
     # Iterate through sorted timesteps
     for t in sorted(last_episode_log.keys()):
