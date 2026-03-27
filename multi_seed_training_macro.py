@@ -47,7 +47,7 @@ class MacroRandomSeedEnv(gym.Env):
         self.init_n_unknown_target = n_unknown_targets
 
         # Build initial env to expose observation and action space
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)), heuristicTracker=False)
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)), heuristicTracker=True)
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
 
@@ -156,7 +156,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     model.learn(total_timesteps=total_timesteps, callback=callback)
 
     # Save the model
-    model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained_maskppo_track.zip")
+    model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained_heuristic_track.zip")
     model.save(model_path)
     print(f"[{algo_name}] Model saved to {model_path}")
 

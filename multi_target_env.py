@@ -287,7 +287,7 @@ class MultiTargetEnv(gym.Env):
         # propagate all known targets
         start = time.perf_counter()
             
-        for tgt in self.targets.copy():
+        for tgt in self.targets:
 
             idx = tgt['id']  # global index
             model = self.motion_model[idx]
