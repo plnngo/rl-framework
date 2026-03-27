@@ -36,7 +36,7 @@ class MacroRandomSeedEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, seed_list, n_targets=5, n_unknown_targets=100, fov_size=4.0):
+    def __init__(self, seed_list, n_targets=5, n_unknown_targets=100, fov_size=4.0, heuristicTracker=True):
         super().__init__()
 
         self.seed_list = seed_list
@@ -45,6 +45,7 @@ class MacroRandomSeedEnv(gym.Env):
         self.fov_size = fov_size
         self.init_n_target = n_targets
         self.init_n_unknown_target = n_unknown_targets
+        self.heuristicTracker = heuristicTracker
 
         # Build initial env to expose observation and action space
         self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)), heuristicTracker=True)
@@ -78,7 +79,7 @@ class MacroRandomSeedEnv(gym.Env):
 
     def reset(self, **kwargs):
         seed = int(np.random.choice(self.seed_list))
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed, heuristicTracker=False)
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed, heuristicTracker=self.heuristicTracker)
         return self.env.reset(seed=seed)
 
     def step(self, action):
@@ -220,12 +221,12 @@ def main():
     # --- PPO ---
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # --- DQN ---
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)

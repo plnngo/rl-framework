@@ -39,18 +39,25 @@ class MacroEnv(gym.Env):
         # --------------------
         self.rng = np.random.default_rng(seed)
         self.action_space = gym.spaces.Discrete(2)  # 0=search, 1=track
-        self.obs_dim_per_target = 1   # trace of covariance
+        self.obs_dim_per_target = 2   # trace of covariance
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
         self.max_targets = self.init_n_targets + self.init_n_unknown_targets
+        self.boundary = 1
         
         obs_len = self.max_targets * self.obs_dim_per_target
         self.observation_space = gym.spaces.Box(
+                low=0.0, 
+                high=np.inf,
+                shape=(self.max_targets, self.obs_dim_per_target),
+                dtype=np.float32
+            )
+        """ self.observation_space = gym.spaces.Box(
             low=-1.0, 
             high=1.0,
             shape=(obs_len,),
             dtype=np.float32
-        )
+        ) """
         self.fov_size = fov_size
         self.threshold_fov = 0.7
         self.tracking_requested = 0.8
@@ -199,7 +206,7 @@ class MacroEnv(gym.Env):
             param = self.motion_params[idx]
 
             predState, predCov = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=real_search_env.dt, rng=self.rng, motion_model=model, motion_param=param)
-            prob = compute_fov_prob_single(1, predState, predCov)
+            prob = compute_fov_prob_single(self.boundary, predState, predCov)
             probSum += prob
 
         if probSum == sum(self.known_mask) and macro_action == 0:
@@ -303,7 +310,7 @@ class MacroEnv(gym.Env):
     def _get_obs(self, target_id=None):
         """Extracts target covariance trace."""
 
-        known_by_id = {t["id"]: t for t in self.targets}
+        """ known_by_id = {t["id"]: t for t in self.targets}
 
         obs_list = []
 
@@ -318,7 +325,26 @@ class MacroEnv(gym.Env):
 
             obs_list.append(p_fov)
 
-        return np.array(obs_list, dtype=np.float32)
+        return np.array(obs_list, dtype=np.float32) """
+
+        by_id = {t["id"]: t for t in self.targets}
+        by_id.update({t["id"]: t for t in self.unknown_targets})
+
+        all_targets = [by_id[k] for k in sorted(by_id)]
+        features = []
+
+        for tgt in all_targets:
+            trace = np.trace(tgt["P"])
+            p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+            known = 1.0 if self.known_mask[tgt["id"]] else 0.0
+
+            features.append([
+                trace * known,
+                p_fov * known
+            ])
+
+        obs = np.stack(features, axis=0)  # shape: (num_targets, 2)
+        return obs.astype(np.float32)
 
         """ all_targets = [] 
         for i in range(self.init_n_targets + self.init_n_unknown_targets):
