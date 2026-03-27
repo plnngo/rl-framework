@@ -4,7 +4,8 @@ import numpy as np
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import DQN, PPO
 from tqdm import trange
-from LSBatchFilter import generate_truth_states
+import KalmanFilter
+from LSBatchFilter import Fx_ct, Fx_ct_linear, Fx_cv_cont, f_ct, f_ct_linear, f_cv_cont, generate_truth_states, propagate_state_and_stm
 import MCTSenv
 from MacroEnv import MacroEnv, _sync_envs
 from deterministic_macro import select_best_action_pFOV
@@ -204,11 +205,17 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
     detection_count = []
     exceedFOV = []
     illegal = []
+    all_init_cond_targets = []
+
+    sigma_r = 0.001        # 1 mm range noise
+    sigma = sigma_r
+
+    R = np.diag([sigma**2, sigma**2])
+    obsFunc = MultiTargetEnv.extract_measurement_XY
 
     # for logging the final episode
-    last_episode_log = {}
+    last_episode_log = []
     last_tasks_log = {}
-    last_env = None
 
     # average number of known targets
     known = []
@@ -216,15 +223,17 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
     for ep in trange(n_episodes, desc="Evaluating",  leave=False):
         seed = int(np.random.choice(seeds))
         obs, _ = env.reset(seed=seed)
+        episode_log = {}        # create a temporary log if this is the last episode
         if ep == n_episodes - 1:
-            last_env = copy.deepcopy(env)
-            episode_log = {}        # create a temporary log if this is the last episode
             episode_task_log = {}
         done = False
         total_reward = 0.0
         detections = env.init_n_targets
         t = 0  # timestep counter
-        illegalActs = 0;
+        illegalActs = 0
+        init_cond_targets = copy.deepcopy(env.targets)
+        init_cond_unknownTargets = copy.deepcopy(env.unknown_targets)
+        all_init_cond_targets.append(init_cond_targets + init_cond_unknownTargets)
 
         while not done:
 
@@ -251,26 +260,26 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
                 detections = known_targets """
 
             # evaluate tracking task
+            episode_log[t] = {}
             if ep == n_episodes - 1:
-                episode_log[t] = {}
                 episode_task_log[t] = {"timestamp": t, "action": int(action)}
-            if ep == n_episodes - 1:
-                for tgt in env.targets:
-                    #print(env.base_env.targets[tgt]["id"])
-                    if info.get("invalid_action") or info.get("catastrophic_loss") or not info["target_id"]:
-                        if info.get("invalid_action"):
-                            illegalActs += 1
-                        continue
-                    #exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
-                    x, P = extract_target_state_cov(tgt["id"], env)
-   
-                    # if this is the last episode, store everything
-                    if tgt["id"] in info["target_id"]:
-                        episode_log[t][tgt["id"]] = {
-                            "id": tgt["id"],
-                            "state": x.copy(),
-                            "cov": P.copy()
-                        }
+            
+            for tgt in env.targets:
+                #print(env.base_env.targets[tgt]["id"])
+                if info.get("invalid_action") or info.get("catastrophic_loss") or not info["target_id"]:
+                    if info.get("invalid_action"):
+                        illegalActs += 1
+                    continue
+                #exceed, x, P = analyse_tracking_task(tgt["id"], env, confidence=0.95)
+                x, P = extract_target_state_cov(tgt["id"], env)
+
+                # if this is the last episode, store everything
+                if tgt["id"] in info["target_id"]:
+                    episode_log[t][tgt["id"]] = {
+                        "id": tgt["id"],
+                        "state": x.copy(),
+                        "cov": P.copy()
+                    }
 
             t += 1  # increment timestep
         rewards.append(total_reward)
@@ -278,13 +287,195 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
         exceedFOV.append(env.lost_counter)
         known.append(env.n_targets)
         illegal.append(illegalActs)
+        last_episode_log.append(episode_log)
+
         # --- For last episode, store deep copy of env ---
         if ep == n_episodes - 1:
-            last_episode_log = episode_log
             last_tasks_log = episode_task_log
-    return rewards, detection_count, exceedFOV, last_env, last_episode_log, known, last_tasks_log, illegal
+
+    # Perform estimation algorithm
+    allTraceOverAllEpisodes = []
+    for episode_log, init_cond in zip(last_episode_log, all_init_cond_targets):
+        tracks = extract_tracks_from_log(episode_log)
+        allTraces = 0
+
+        for target_id, track in tracks.items():
+            init_entry = next(
+                (tgt for tgt in init_cond if tgt["id"] == target_id),
+                None
+            )
+
+            if init_entry is None:
+                print(f"Warning: target_id {target_id} not found in initial conditions, skipping.")
+                continue
+
+            x0 = init_entry["x"]
+            P0 = init_entry["P"]
+
+            propagated = propagate_to_track_timesteps(track, x0, P0, target_id, env, obsFunc)
+
+            # t_obs: (L,) array of timesteps
+            timesteps = np.array([entry["t"] for entry in propagated])
+
+            # obs: (L, p) array of measurements  <-- ekf indexes as obs[k, :]
+            tgt_meas = np.array([entry["measurement"] for entry in propagated])
+
+            # Xo_ref: initial reference state
+            Xo_ref = x0.copy()
+
+            # Motion model dependent dynamics functions
+            if env.motion_model[target_id] == "T":
+                f_dyn  = f_ct_linear
+                Fx_dyn = Fx_ct_linear
+            else:
+                f_dyn  = f_cv_cont
+                Fx_dyn = Fx_cv_cont
+
+            inputs = {
+                "Rk":    R,                          # measurement noise covariance (p, p)
+                "Q":     np.eye(2) * 0,                           # process noise covariance
+                "Po":    P0,                          # initial state covariance (n, n)
+                "f_dyn": f_dyn,
+                "Fx_dyn": Fx_dyn,
+            }
+
+            # Optionally add omega for turning targets
+            if env.motion_model[target_id] == "T":
+                inputs["omega"] = env.motion_params[target_id]
+
+            Xk, Pk, resids = KalmanFilter.ekf(
+                Xo_ref = Xo_ref,
+                t_obs  = timesteps,
+                obs    = tgt_meas,
+                intfcn = None,       # unused, ekf uses f_dyn/Fx_dyn from inputs directly
+                H_fcn  = obsFunc,
+                inputs = inputs
+            )
+
+            # --- Propagate last EKF estimate to t=100 ---
+
+            # Extract last estimate and its timestep
+            t_last = timesteps[-1]
+            x_last = Xk[:, -1].copy()      # shape (n,)
+            P_last = Pk[:, :, -1].copy()   # shape (n, n)
+
+            n = x_last.shape[0]
+            Phi0 = np.eye(n).reshape(-1)
+
+            # Only propagate if last timestep is before t=100
+            if t_last < 100:
+                x_prop, Phi = propagate_state_and_stm(
+                    t0=t_last,
+                    t1=100,
+                    x0=x_last,
+                    Phi0_vec=Phi0,
+                    f_dyn=f_dyn,
+                    Fx_dyn=Fx_dyn,
+                    n=n,
+                    omega=inputs.get("omega", 0)
+                )
+                Phi = Phi.reshape(n, n)
+                P_prop = Phi @ P_last @ Phi.T
+            else:
+                # Last update is already at t=100, no propagation needed
+                x_prop = x_last
+                P_prop = P_last
+
+            # Extract trace from propagated covariance
+            traceCov = np.trace(P_prop)
+            allTraces += traceCov
+
+        allTraceOverAllEpisodes.append(allTraces)
+
+    return rewards, detection_count, exceedFOV, allTraceOverAllEpisodes, last_episode_log, known, last_tasks_log, illegal
 
 
+def propagate_to_track_timesteps(track, x0, P0, target_id, env, H_fcn):
+    """
+    Propagate x0 and P0 to the timesteps saved in track, and extract measurements.
+
+    Args:
+        track:      list of dicts with {"t": timestep, "state": ..., "cov": ...}
+        x0:         initial state vector
+        P0:         initial covariance matrix
+        target_id:  target ID (used to select motion model)
+        env:        environment (for motion_model and motion_params)
+        H_fcn:      measurement function returning (H, measurement)
+
+    Returns:
+        propagated: list of dicts with {"t": timestep, "x": propagated state, 
+                                        "P": propagated covariance,
+                                        "H": observation matrix,
+                                        "measurement": measurement vector}
+    """
+
+    n = x0.shape[0]
+    Phi0 = np.eye(n).reshape(-1)
+
+    t_vec = [entry["t"] for entry in track]
+
+    propagated = []
+
+    # --- Propagate from t=0 to first timestep in track ---
+    x_curr = x0.copy()
+    P_curr = P0.copy()
+    t_first = t_vec[0]
+
+    if t_first > 0:
+        if env.motion_model[target_id] == "T":
+            x_curr, Phi = propagate_state_and_stm(
+                0.0, t_first, x_curr, Phi0,
+                f_ct_linear, Fx_ct_linear, n
+            )
+        else:
+            x_curr, Phi = propagate_state_and_stm(
+                0.0, t_first, x_curr, Phi0,
+                f_cv_cont, Fx_cv_cont, n
+            )
+        Phi = Phi.reshape(n, n)
+        P_curr = Phi @ P_curr @ Phi.T
+
+    H, Gk = H_fcn(x_curr[:4])
+    propagated.append({
+        "t": t_first,
+        "x": x_curr.copy(),
+        "P": P_curr.copy(),
+        "H": H,
+        "measurement": Gk
+    })
+
+    # --- Propagate through remaining timesteps in track ---
+    for k in range(len(t_vec) - 1):
+        t0 = t_vec[k]
+        t1 = t_vec[k + 1]
+
+        if env.motion_model[target_id] == "T":
+            x_next, Phi = propagate_state_and_stm(
+                t0, t1, x_curr, Phi0,
+                f_ct_linear, Fx_ct_linear, n, env.motion_params[target_id]
+            )
+        else:
+            x_next, Phi = propagate_state_and_stm(
+                t0, t1, x_curr, Phi0,
+                f_cv_cont, Fx_cv_cont, n
+            )
+
+        Phi = Phi.reshape(n, n)
+        P_next = Phi @ P_curr @ Phi.T
+
+        H, Gk = H_fcn(x_next[:4])
+        propagated.append({
+            "t": t1,
+            "x": x_next.copy(),
+            "P": P_next.copy(),
+            "H": H,
+            "measurement": Gk
+        })
+
+        x_curr = x_next
+        P_curr = P_next
+
+    return propagated
 
 def plot_pareto(detection_count, exceedFOV):
     """
@@ -490,7 +681,7 @@ def main():
     # Heuristic tracker
     tracker = "heuristic"
     envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=True, tracker=tracker)
-    rewardsHeuristicHeuristic, detection_countHeuristicHeuristic, exceedFOVHeuristicHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristicHeuristic, last_tasks_logHeuristicHeuristic, illegal_heuristicHeuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    rewardsHeuristicHeuristic, detection_countHeuristicHeuristic, exceedFOVHeuristicHeuristic, allTracesHeuristicHeuristic, last_episode_logHeuristic, knownHeuristicHeuristic, last_tasks_logHeuristicHeuristic, illegal_heuristicHeuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
     print("Reward - Heuristic macro - Heuristic tracker")
     print(sum(rewardsHeuristicHeuristic)/len(rewardsHeuristicHeuristic))
     print(np.std([np.mean(arr) for arr in rewardsHeuristicHeuristic], ddof=1))
@@ -506,11 +697,15 @@ def main():
     print("Illegal")
     print(sum(illegal_heuristicHeuristic)/len(illegal_heuristicHeuristic))
     print(np.std([np.mean(arr) for arr in illegal_heuristicHeuristic], ddof=1))
+    print("Covariance trace sum")
+    print(sum(allTracesHeuristicHeuristic) / len(allTracesHeuristicHeuristic))
+    print(np.std(allTracesHeuristicHeuristic, ddof=1))
+
 
     # Mask PPO tracker
     tracker = "maskppo"
     envHeuristic = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker=tracker)
-    rewardsHeuristic, detection_countHeuristic, exceedFOVHeuristic, last_envHeuristic, last_episode_logHeuristic, knownHeuristic, last_tasks_logHeuristic, illegal_heuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
+    rewardsHeuristic, detection_countHeuristic, exceedFOVHeuristic, allTracesHeuristic, last_episode_logHeuristic, knownHeuristic, last_tasks_logHeuristic, illegal_heuristic = evaluate_agent_macro(seeds=seeds, env=envHeuristic, model=None, n_episodes=n_episodes, random_policy=False, deterministic_policy=True)
     print("Reward - Heuristic macro - Mask PPO tracker")
     print(sum(rewardsHeuristic)/len(rewardsHeuristic))
     print(np.std([np.mean(arr) for arr in rewardsHeuristic], ddof=1))
@@ -526,9 +721,12 @@ def main():
     print("Illegal")
     print(sum(illegal_heuristic)/len(illegal_heuristic))
     print(np.std([np.mean(arr) for arr in illegal_heuristic], ddof=1))
+    print("Covariance trace sum")
+    print(sum(allTracesHeuristic) / len(allTracesHeuristic))
+    print(np.std(allTracesHeuristic, ddof=1))
 
     envRandom = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker=tracker)
-    rewardsRandom, detection_countRandom, exceedFOVRandom, last_envRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom, illegal_random = evaluate_agent_macro(seeds=seeds, env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
+    rewardsRandom, detection_countRandom, exceedFOVRandom, allTracesRandom, last_episode_logRandom, knownRandom, last_tasks_logRandom, illegal_random = evaluate_agent_macro(seeds=seeds, env=envRandom, model=None, n_episodes=n_episodes, random_policy=True, deterministic_policy=False)
     print("Reward - Random macro - Mask PPO tracker")
     print(sum(rewardsRandom)/len(rewardsRandom))
     print(np.std([np.mean(arr) for arr in rewardsRandom], ddof=1))
@@ -544,6 +742,9 @@ def main():
     print("Illegal")
     print(sum(illegal_random)/len(illegal_random))
     print(np.std([np.mean(arr) for arr in illegal_random], ddof=1))
+    print("Covariance trace sum")
+    print(sum(allTracesRandom) / len(allTracesRandom))
+    print(np.std(allTracesRandom, ddof=1))
 
     """ envPPO = MacroRandomSeedEnv._make_env(n_targets,n_unknown_targets,seed=int(np.random.choice(seeds)), heuristicTracker=False, tracker=tracker)
     ppo_model = PPO.load("agents/ppo_macro_trained_dqn_track", env=envPPO)
