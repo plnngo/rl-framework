@@ -43,7 +43,7 @@ class MacroEnv(gym.Env):
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
         self.max_targets = self.init_n_targets + self.init_n_unknown_targets
-        self.boundary = np.sqrt(1.0e-6)
+        self.boundary = np.sqrt(1.0e-2)
         self._last_prob_sum = 0.0
         
         self.observation_space = spaces.Box(

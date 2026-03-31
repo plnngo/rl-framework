@@ -40,7 +40,7 @@ def train_dqn_macro(
     params,
     trial_name,
     seed_list,
-    total_timesteps=20_000,
+    total_timesteps=60_000,
     plotter=None,
     color=None,
 ):
@@ -95,25 +95,25 @@ def objective_macro(trial, seed_list, shared_plotter=None):
 
     params = {
         # --- Learning ---
-        "learning_rate": trial.suggest_float("learning_rate", 5e-5, 4e-4, log=True),
-        "gamma": trial.suggest_float("gamma", 0.90, 0.97),
+        "learning_rate": trial.suggest_float("learning_rate", 1e-4, 1e-3, log=True),
+        "gamma": trial.suggest_float("gamma", 0.95, 0.999),
 
         # --- Replay ---
-        "buffer_size": trial.suggest_categorical("buffer_size", [30_000, 50_000, 100_000]),
-        "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]),
+        "buffer_size": trial.suggest_categorical("buffer_size", [10_000, 30_000, 50_000]),
+        "batch_size": trial.suggest_categorical("batch_size", [64, 128, 256]),
 
         # --- Exploration schedule ---
-        "exploration_fraction": trial.suggest_float("exploration_fraction", 0.4, 0.8),
-        "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.03, 0.1),
+        "exploration_fraction": trial.suggest_float("exploration_fraction", 0.2, 0.5),
+        "exploration_final_eps": trial.suggest_float("exploration_final_eps", 0.01, 0.05),
 
         # --- Training schedule ---
         "train_freq": trial.suggest_categorical("train_freq", [1, 4]),
-        "gradient_steps": trial.suggest_categorical("gradient_steps", [4, 8]),
-        "learning_starts": trial.suggest_categorical("learning_starts", [5000, 10000]),
+        "gradient_steps": trial.suggest_categorical("gradient_steps", [1, 4, 8]),
+        "learning_starts": trial.suggest_categorical("learning_starts", [1000, 2000, 5000]),
 
         # --- Target update ---
         "target_update_interval": trial.suggest_categorical(
-            "target_update_interval", [8000, 12000]
+            "target_update_interval", [1000, 3000, 5000]
         ),
 
         # --- Stabilisation ---
@@ -121,7 +121,7 @@ def objective_macro(trial, seed_list, shared_plotter=None):
 
         # --- Network ---
         "policy_kwargs": dict(
-            net_arch=trial.suggest_categorical("net_arch", [(128, 128), (256, 256)])
+            net_arch=trial.suggest_categorical("net_arch", [(32, 32), (64, 64), (128, 128)])
         ),
     }
 
@@ -161,7 +161,9 @@ def main():
     """
 
     # Full seed list used by MacroRandomSeedEnv for sampling
-    seed_list = [42, 123, 321]
+    #seed_list = [42, 123, 321]
+    seed_list = [42]
+
 
     shared_plotter = SharedLivePlot("Tune MacroDQN")
 

@@ -2,11 +2,14 @@ import os
 import numpy as np
 import gymnasium as gym
 import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 import pandas as pd
 
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import PPO, DQN
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.callbacks import EvalCallback, CallbackList
+from stable_baselines3.common.monitor import Monitor
 
 from MacroEnv import MacroEnv
 from multi_target_env import MultiTargetEnv
@@ -19,7 +22,7 @@ from train_agent import SharedLivePlot, LivePlotCallback
 
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 10_000
+total_timesteps = 100_000
 save_dir = "macro_results"
 os.makedirs(save_dir, exist_ok=True)
 
@@ -145,21 +148,79 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     else:
         raise ValueError("Unknown RL algorithm.")
 
-    # Live plotting callback
-    callback = LivePlotCallback(
+    # Separate eval env — must be a different instance
+
+    print(f"save_dir exists: {os.path.exists(save_dir)}")
+    print(f"seeds value: {seeds}")
+    eval_env = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
+
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=save_dir,
+        eval_freq=500,          # evaluate every 500 training steps
+        n_eval_episodes=20,     # average over 20 episodes
+        deterministic=True,     # no epsilon-greedy
+        render=False,
+        verbose=1,
+    )
+
+    live_callback = LivePlotCallback(
         plotter=plotter,
         name=algo_name,
         color=color,
         plot_interval=50,
     )
 
-    # Train the agent
-    model.learn(total_timesteps=total_timesteps, callback=callback)
+    # Combine both callbacks
+    callbacks = CallbackList([live_callback, eval_callback])
+
+    model.learn(total_timesteps=total_timesteps, callback=callbacks)
+
+    # ── Sanity check: random policy on eval env ────────────────────
+    obs = eval_env.reset()
+    total_reward = 0
+    done = False
+    while not done:
+        action = [eval_env.action_space.sample()]
+        obs, reward, done, _ = eval_env.step(action)
+        total_reward += reward.item()
+    print(f"[{algo_name}] Random policy on eval env: {total_reward}")
+    # ──────────────────────────────────────────────────────────────
 
     # Save the model
     model_path = os.path.join(save_dir, f"{algo_name.lower()}_macro_trained_heuristic_track.zip")
     model.save(model_path)
     print(f"[{algo_name}] Model saved to {model_path}")
+
+    # ── Plot eval results ──────────────────────────────────────────
+    eval_path = os.path.join(save_dir, "evaluations.npz")
+    if os.path.exists(eval_path):
+        data = np.load(eval_path)
+        timesteps    = data["timesteps"]
+        mean_rewards = data["results"].mean(axis=1)
+        std_rewards  = data["results"].std(axis=1)
+
+        plt.figure(figsize=(10, 4))
+        plt.plot(timesteps, mean_rewards, label=f"{algo_name} (eval, deterministic)")
+        plt.fill_between(
+            timesteps,
+            mean_rewards - std_rewards,
+            mean_rewards + std_rewards,
+            alpha=0.2,
+            label="±1 std"
+        )
+        plt.axhline(y=100, color="green", linestyle="--", label="Heuristic (100)")
+        plt.axhline(y=50,  color="red",   linestyle="--", label="Random baseline (50)")
+        plt.xlabel("Timesteps")
+        plt.ylabel("Episode Reward")
+        plt.title(f"{algo_name} Evaluation Curve")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f"{algo_name}_eval_curve.png"))
+        plt.show()
+    else:
+        print(f"[{algo_name}] No evaluations.npz found at {eval_path}")
+    # ──────────────────────────────────────────────────────────────
 
     env.close()
 
@@ -221,12 +282,12 @@ def main():
     # --- PPO ---
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # --- DQN ---
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)

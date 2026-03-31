@@ -242,7 +242,7 @@ def evaluate_agent_macro(seeds=None, env=None, model=None, n_episodes=100, rando
                 obs, reward, done, truncated, info, action, micro = run_mcts_step(env, model, obs)
             elif deterministic_policy:
                 #action = select_best_macro_action(env)
-                action = select_best_action_pFOV(env, dt=1.0, boundary=1) #boundary=np.sqrt(1.0e-6)
+                action = select_best_action_pFOV(env, dt=1.0, boundary=env.boundary) #boundary=np.sqrt(1.0e-6)
                 obs, reward, done, truncated, info = env.step(action)
 
             else:
@@ -671,7 +671,7 @@ def plot_task_log(task_log, title="Action Timeline"):
 
 def main():
     seeds = [42, 123, 321]
-    n_episodes = 5
+    n_episodes = 1
     n_targets = 5
     n_unknown_targets =100
 

@@ -100,12 +100,12 @@ class LivePlotCallback(BaseCallback):
         self.plotter.register_line(self.name, color=self.color)
         self.plotter.register_advantage_line(self.name, color=self.color)  # ← add this
 
-    def _on_rollout_end(self):
+    """ def _on_rollout_end(self):
         advantages = self.model.rollout_buffer.advantages.flatten()
         mean_adv = np.mean(advantages)
         std_adv  = np.std(advantages)
         self.plotter.update_advantages(self.name, self.num_timesteps, mean_adv, std_adv)
-        print(f"[Rollout {self.num_timesteps}] mean adv: {mean_adv:.4f}, std: {std_adv:.4f}")
+        print(f"[Rollout {self.num_timesteps}] mean adv: {mean_adv:.4f}, std: {std_adv:.4f}") """
 
     def _on_step(self):
         rewards = self.locals.get("rewards")
