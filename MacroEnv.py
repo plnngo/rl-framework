@@ -39,19 +39,24 @@ class MacroEnv(gym.Env):
         # --------------------
         self.rng = np.random.default_rng(seed)
         self.action_space = gym.spaces.Discrete(2)  # 0=search, 1=track
-        self.obs_dim_per_target = 2   # trace of covariance
+        self.obs_dim_per_target = 1   # trace of covariance
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
         self.max_targets = self.init_n_targets + self.init_n_unknown_targets
-        self.boundary = 1
+        self.boundary = np.sqrt(1.0e-6)
+        self._last_prob_sum = 0.0
         
-        obs_len = self.max_targets * self.obs_dim_per_target
-        self.observation_space = gym.spaces.Box(
+        self.observation_space = spaces.Box(
+            low=np.array([0.0, -1.0]),
+            high=np.array([1.0,  1.0]),
+            dtype=np.float32
+        )
+        """ self.observation_space = gym.spaces.Box(
                 low=0.0, 
                 high=np.inf,
                 shape=(self.max_targets, self.obs_dim_per_target),
                 dtype=np.float32
-            )
+            ) """
         """ self.observation_space = gym.spaces.Box(
             low=-1.0, 
             high=1.0,
@@ -96,6 +101,7 @@ class MacroEnv(gym.Env):
         self.n_unknown_targets = self.init_n_unknown_targets
         self.lost_counter = 0
         self.detect_counter = 0
+        self._last_prob_sum = 0.0
 
         #reset dynamics
         self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
@@ -281,14 +287,10 @@ class MacroEnv(gym.Env):
 
             # sync back into base env """
             _sync_envs(real_track_env, self)
-        
-        
 
-
-        
         next_obs = self._get_obs()
         self.obs = next_obs
-        macro_reward = sum(next_obs)
+        #macro_reward = sum(next_obs)
         """ if info["lost_target"]:
             self.step_count += 1
 
@@ -327,7 +329,7 @@ class MacroEnv(gym.Env):
 
         return np.array(obs_list, dtype=np.float32) """
 
-        by_id = {t["id"]: t for t in self.targets}
+        """ by_id = {t["id"]: t for t in self.targets}
         by_id.update({t["id"]: t for t in self.unknown_targets})
 
         all_targets = [by_id[k] for k in sorted(by_id)]
@@ -344,7 +346,31 @@ class MacroEnv(gym.Env):
             ])
 
         obs = np.stack(features, axis=0)  # shape: (num_targets, 2)
-        return obs.astype(np.float32)
+        
+        #print(obs.shape)
+        return obs.astype(np.float32) """
+
+        """Returns normalised sum of p_fov over known targets as a scalar."""
+
+        n_known = sum(self.known_mask)
+
+        if n_known == 0:
+            self._last_prob_sum = 0.0
+            return np.array([0.0, 0.0], dtype=np.float32)
+
+        prob_sum = 0.0
+        for tgt in self.targets:
+            if self.known_mask[tgt["id"]]:
+                prob_sum += compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+
+        normalised = prob_sum / n_known
+
+        # Compute delta from last observation
+        delta = normalised - self._last_prob_sum
+        self._last_prob_sum = normalised  # update for next call
+
+        obs = np.array([normalised, delta], dtype=np.float32)  # shape: (2,)
+        return obs
 
         """ all_targets = [] 
         for i in range(self.init_n_targets + self.init_n_unknown_targets):
