@@ -1,9 +1,11 @@
 import os
+import time
 import numpy as np
 import gymnasium as gym
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import pandas as pd
+import wandb
 
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import PPO, DQN
@@ -22,8 +24,9 @@ from train_agent import SharedLivePlot, LivePlotCallback
 
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps = 100_000
-save_dir = "macro_results"
+total_timesteps = 500
+job_id = os.environ.get("SLURM_JOB_ID", str(int(time.time())))
+save_dir = f"macro_results/job_{job_id}"
 os.makedirs(save_dir, exist_ok=True)
 
 
@@ -115,7 +118,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
             learning_rate=0.00044614011815097786, #0.0003568750531511821,
             n_steps=384, #512,
             batch_size=128,
-            gamma=0.952199041429737, #0.9286417039953475,
+            gamma=0.999, #0.952199041429737, #0.9286417039953475,
             gae_lambda=0.9180541616290008, #0.9413945148574974,
             clip_range=0.12790513745344512,#0.15498735004187073,
             ent_coef=0.03565509800026144, #0.03513597942956761,
@@ -149,6 +152,21 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         raise ValueError("Unknown RL algorithm.")
 
     # Separate eval env — must be a different instance
+
+    # ── Initialise wandb ──────────────────────────────────────────
+    run = wandb.init(
+        entity="p-l-n-ngo-tu-delft",
+        project="macro-rl",
+        name=f"{algo_name}_job{job_id}",
+        config={
+            "algo": algo_name,
+            "total_timesteps": total_timesteps,
+            "gamma": model.gamma,
+            "learning_rate": model.learning_rate,
+            "net_arch": [128, 64] if algo_name == "PPO" else [128, 128],
+        }
+    )
+    # ─────────────────────────────────────────────────────────────
 
     print(f"save_dir exists: {os.path.exists(save_dir)}")
     print(f"seeds value: {seeds}")
@@ -222,6 +240,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         print(f"[{algo_name}] No evaluations.npz found at {eval_path}")
     # ──────────────────────────────────────────────────────────────
 
+    run.finish()
     env.close()
 
 
@@ -277,17 +296,17 @@ def run_random_policy(plotter, color, total_timesteps, save_dir):
 # =============================================================================
 
 def main():
-    shared_plotter = SharedLivePlot("MacroEnv Agent Comparison")
+    shared_plotter = SharedLivePlot("MacroEnv Agent Comparison", job_id)
 
     # --- PPO ---
     color_ppo = cm.get_cmap("tab10")(0)
     env_ppo = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    #train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
+    train_agent("PPO", env_ppo, shared_plotter, color_ppo, total_timesteps, save_dir)
 
     # --- DQN ---
     color_dqn = cm.get_cmap("tab10")(1)
     env_dqn = DummyVecEnv([lambda: MacroRandomSeedEnv(seeds)])
-    train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
+    #train_agent("DQN", env_dqn, shared_plotter, color_dqn, total_timesteps, save_dir)
 
     # --- RANDOM POLICY ---
     color_random = cm.get_cmap("tab10")(2)
