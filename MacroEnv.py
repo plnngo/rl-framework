@@ -5,7 +5,7 @@ import copy
 
 from sb3_contrib import MaskablePPO
 
-from deterministic_tracker import select_best_action_pFOV, select_best_action_sumTrace
+from deterministic_tracker import select_best_action_pFOV, select_best_action_sumTrace, select_best_pointingToFind
 from multi_target_env import MultiTargetEnv, compute_fov_prob_single
 
 def unwrap_env(env):
@@ -46,11 +46,11 @@ class MacroEnv(gym.Env):
         self.boundary = np.sqrt(1.0e-2)
         self._last_prob_sum = 0.0
         
-        self.observation_space = spaces.Box(
+        """ self.observation_space = spaces.Box(
             low=np.array([0.0, -1.0]),
             high=np.array([1.0,  1.0]),
             dtype=np.float32
-        )
+        ) """
         """ self.observation_space = gym.spaces.Box(
                 low=0.0, 
                 high=np.inf,
@@ -63,6 +63,11 @@ class MacroEnv(gym.Env):
             shape=(obs_len,),
             dtype=np.float32
         ) """
+        self.observation_space = spaces.Box(
+            low=np.zeros((self.max_targets, 3), dtype=np.float32),
+            high=np.array([[np.inf, 1.0, 1.0]] * self.max_targets, dtype=np.float32),
+            dtype=np.float32
+        )
         self.fov_size = fov_size
         self.threshold_fov = 0.7
         self.tracking_requested = 0.8
@@ -204,28 +209,11 @@ class MacroEnv(gym.Env):
         _sync_envs(self, real_search_env)
         _sync_envs(self, real_track_env)
 
-        # Compute macro reward
-        probSum = 0
-        for tgt in self.targets:
-            idx = tgt['id']  # global index
-            model = self.motion_model[idx]
-            param = self.motion_params[idx]
-
-            predState, predCov = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=real_search_env.dt, rng=self.rng, motion_model=model, motion_param=param)
-            prob = compute_fov_prob_single(self.boundary, predState, predCov)
-            probSum += prob
-
-        if probSum == sum(self.known_mask) and macro_action == 0:
-            macro_reward = 1
-        elif probSum != sum(self.known_mask) and macro_action == 1:
-            macro_reward = 1
-        else:
-            macro_reward = 0
-
         # choose agent
         if macro_action == 0:
             obs = real_search_env.obs
-            micro_action, _ = self.search_agent.predict(obs, deterministic=False)
+            #micro_action, _ = self.search_agent.predict(obs, deterministic=False)
+            micro_action = select_best_pointingToFind(real_search_env)
             next_obs, micro_reward, done, truncated, info = real_search_env.step(micro_action)
             """ trackingNeeded, trackingReallyNeeded = self._compute_track_reward(self.base_env)
             if (sum(trackingNeeded) + sum(trackingReallyNeeded))>=1:
@@ -288,6 +276,14 @@ class MacroEnv(gym.Env):
             # sync back into base env """
             _sync_envs(real_track_env, self)
 
+        # Compute macro reward
+        probSum = 0
+        for tgt in self.targets:
+
+            prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
+            probSum += prob
+
+        macro_reward = probSum / len(self.targets)
         next_obs = self._get_obs()
         self.obs = next_obs
         #macro_reward = sum(next_obs)
@@ -329,12 +325,22 @@ class MacroEnv(gym.Env):
 
         return np.array(obs_list, dtype=np.float32) """
 
-        """ by_id = {t["id"]: t for t in self.targets}
+        by_id = {t["id"]: t for t in self.targets}
         by_id.update({t["id"]: t for t in self.unknown_targets})
 
         all_targets = [by_id[k] for k in sorted(by_id)]
-        features = []
 
+        # Compute global summary statistics first
+        n_known = sum(self.known_mask)
+        prob_sum = 0.0
+        for tgt in self.targets:
+            if self.known_mask[tgt["id"]]:
+                prob_sum += compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+
+        gap_to_threshold = np.clip((n_known - prob_sum) / n_known, 0.0, 1.0) if n_known > 0 else 0.0
+
+        # Build per-target features
+        features = []
         for tgt in all_targets:
             trace = np.trace(tgt["P"])
             p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
@@ -342,17 +348,16 @@ class MacroEnv(gym.Env):
 
             features.append([
                 trace * known,
-                p_fov * known
+                p_fov * known,
+                gap_to_threshold  # same value repeated per row
             ])
 
-        obs = np.stack(features, axis=0)  # shape: (num_targets, 2)
-        
-        #print(obs.shape)
-        return obs.astype(np.float32) """
+        obs = np.stack(features, axis=0)  # shape: (num_targets, 3)
+        return obs.astype(np.float32)
 
         """Returns normalised sum of p_fov over known targets as a scalar."""
 
-        n_known = sum(self.known_mask)
+        """ n_known = sum(self.known_mask)
 
         if n_known == 0:
             self._last_prob_sum = 0.0
@@ -370,7 +375,7 @@ class MacroEnv(gym.Env):
         self._last_prob_sum = normalised  # update for next call
 
         obs = np.array([normalised, delta], dtype=np.float32)  # shape: (2,)
-        return obs
+        return obs """
 
         """ all_targets = [] 
         for i in range(self.init_n_targets + self.init_n_unknown_targets):
