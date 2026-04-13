@@ -1,6 +1,9 @@
 import os
+import matplotlib
+matplotlib.use("Agg") 
 import matplotlib.pyplot as plt
 import numpy as np
+import wandb
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from multi_target_env import MultiTargetEnv
@@ -10,13 +13,14 @@ from multi_target_env import MultiTargetEnv
 # Shared Live Plot Manager
 # =========================================================
 class SharedLivePlot:
-    def __init__(self, title):
+    def __init__(self, title, jobid):
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(10, 5))
         self.lines = {}
         self.ax.set_xlabel("Timesteps")
         self.ax.set_ylabel("Episode Reward")
         self.ax.set_title(title)
+        self.job = jobid
 
         self.fig_adv, (self.ax_adv_mean, self.ax_adv_std) = plt.subplots(1, 2, figsize=(12, 4))
         self.ax_adv_mean.set_title("Mean Advantage over Training")
@@ -77,9 +81,9 @@ class SharedLivePlot:
     def finalize(self):
         plt.ioff()
         self.ax.legend()
-        self.fig.savefig("episode_rewards.pdf")
-        self.fig_adv.savefig("advantage_log.pdf")
-        plt.show()
+        self.fig.savefig(f"episode_rewards_job_{self.job}.pdf")
+        self.fig_adv.savefig(f"advantage_log_job_{self.job}.pdf")
+        #plt.show()
 
 
 # =========================================================
@@ -100,12 +104,17 @@ class LivePlotCallback(BaseCallback):
         self.plotter.register_line(self.name, color=self.color)
         self.plotter.register_advantage_line(self.name, color=self.color)  # ← add this
 
-    """ def _on_rollout_end(self):
+    def _on_rollout_end(self):
         advantages = self.model.rollout_buffer.advantages.flatten()
         mean_adv = np.mean(advantages)
         std_adv  = np.std(advantages)
         self.plotter.update_advantages(self.name, self.num_timesteps, mean_adv, std_adv)
-        print(f"[Rollout {self.num_timesteps}] mean adv: {mean_adv:.4f}, std: {std_adv:.4f}") """
+        wandb.log({
+            "advantage_mean": mean_adv,
+            "advantage_std": std_adv,
+            "timestep": self.num_timesteps
+        })
+        print(f"[Rollout {self.num_timesteps}] mean adv: {mean_adv:.4f}, std: {std_adv:.4f}")
 
     def _on_step(self):
         rewards = self.locals.get("rewards")
@@ -118,12 +127,12 @@ class LivePlotCallback(BaseCallback):
             # Regular episodic update
             if done:
                 self.plotter.update(self.name, self.current_episode_reward, self.current_episode_length)
-                """ if 490 <= self.current_episode_reward <= 500:
-                        self.plotter.update(
-                            self.name,
-                            self.current_episode_reward,
-                            self.current_episode_length
-                        ) """
+                # Log to wandb
+                wandb.log({
+                    "episode_reward": self.current_episode_reward,
+                    "episode_length": self.current_episode_length,
+                    "timestep": self.num_timesteps
+                })
                 self.current_episode_reward = 0
                 self.current_episode_length = 0
                 
