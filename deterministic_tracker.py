@@ -251,3 +251,26 @@ def select_best_macro_action(env):
     obs = env._get_obs()
     known_obs = obs[env.known_mask]
     return 1 if np.any(known_obs <= env.threshold_fov) else 0
+
+def select_best_pointingToFind(env):
+    obj = random.choice(env.unknown_targets)
+
+    idx = obj['id']
+    model = env.motion_model[idx]
+    param = env.motion_params[idx]
+    x_pred, P_pred = MultiTargetEnv.propagate_target_2D(
+        obj['x'], obj['P'], obj.get('Q', env.Q0),
+        dt=env.dt,
+        rng=env.rng,
+        motion_model=model,
+        motion_param=param
+    )
+
+    dx = x_pred[0]
+    dy = x_pred[1]
+
+    pos = np.array([dx, dy])
+    dists = np.sum((env.grid_coords - pos) ** 2, axis=1)
+    grid_idx = int(np.argmin(dists))
+  
+    return np.array(grid_idx)
