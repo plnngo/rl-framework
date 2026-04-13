@@ -7,7 +7,7 @@ from typing import Optional
 #from graphviz import Digraph, Source
 
 from MacroEnv import _sync_envs
-from deterministic_tracker import select_best_action_pFOV
+from deterministic_tracker import select_best_action_pFOV, select_best_action_sumTrace, select_best_pointingToFind
 
 class MCTSNode:
     def __init__(self, parent=None, macro_action=None, micro_action=None, env=None, done=False):
@@ -116,7 +116,8 @@ class MCTS:
         micro_action = None
         if macro_action == 0:  # SEARCH
             obs = env.search_env.env.obs
-            micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+            #micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+            micro_action = select_best_pointingToFind(env.search_env.env)
             next_obs, rewards, done, truncated, info = env.search_env.env.step(micro_action) 
             _sync_envs(env.search_env.env, env)
             _sync_envs(env.search_env.env, env.track_env.env)
@@ -126,14 +127,17 @@ class MCTS:
                 # fallback to search
                 macro_action = 0
                 obs = env.search_env.env.obs
-                micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                #micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                micro_action = select_best_pointingToFind(env.search_env.env)
                 next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
                 _sync_envs(env.search_env.env, env)
                 _sync_envs(env.search_env.env, env.track_env.env)
                 micro_track = None
             else:
                 #micro_track = np.random.choice(known_targets)
-                micro_action, best_ig, best_update = select_best_action_pFOV(env.track_env.env, self.env.track_env.env.dt)
+                #micro_action, best_ig, best_update = select_best_action_pFOV(env.track_env.env, self.env.track_env.env.dt)
+                micro_action, best_ig, best_update = select_best_action_sumTrace(env.track_env.env, env.track_env.env.dt)
+
                 micro_search = None
                 action = env.track_env.env.encode_action(macro_action, micro_search, micro_action)
                 next_obs, rewards, done, truncated, info = env.track_env.env.step(action) 
@@ -171,7 +175,8 @@ class MCTS:
             # Sample micro action
             if macro_action == 0:  # SEARCH
                 obs = env.search_env.env.obs
-                micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                #micro_action, _ = env.search_agent.predict(obs, deterministic=False)
+                micro_action = select_best_pointingToFind(env.search_env.env)
                 next_obs, reward, done, truncated, info = env.search_env.env.step(micro_action) 
                 _sync_envs(env.search_env.env, env)
                 _sync_envs(env.search_env.env, env.track_env.env)
@@ -251,7 +256,7 @@ class MCTS:
         root.imm_reward_vec = np.zeros(self.n_objectives)
         root.value_vec = np.zeros(self.n_objectives)
 
-        for _ in range(self.n_simulations):
+        for step in range(self.n_simulations):
             env_copy = copy.deepcopy(root_env)
             node = root
             path = [node]
