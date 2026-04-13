@@ -1,6 +1,8 @@
 import copy
 import random
 import time
+import os
+import re
 from matplotlib.colors import to_rgba
 from sb3_contrib import MaskablePPO
 from stable_baselines3 import DQN, PPO
@@ -770,12 +772,26 @@ def plot_violin(results_dict, ylabel="Episode Reward"):
         data.extend(values)
         labels.extend([label] * len(values))
 
+    plt.figure()
     sns.violinplot(x=labels, y=data, inner="quart", cut=0, palette=colors)
     plt.xlabel("Agent")
     plt.ylabel(ylabel)
     plt.title(f"Distribution of {ylabel}")
     plt.grid(True, linestyle='--', alpha=0.5)
-    plt.show()
+
+    # Create output folder
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(script_dir, "evaluated")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # --- sanitize ylabel for filename ---
+    safe_ylabel = re.sub(r'[^a-zA-Z0-9]+', '_', ylabel).strip('_').lower()
+
+    filename = f"violin_{safe_ylabel}.pdf"
+    filepath = os.path.join(output_dir, filename)
+
+    plt.savefig(filepath, bbox_inches='tight')
+    plt.close()
 
 def visualize_trained_agent(env, model, n_steps=20):
     """Run the trained agent and visualize its decisions and environment state."""
