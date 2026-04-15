@@ -411,12 +411,12 @@ class MultiTargetEnv(gym.Env):
             truncated = False
 
             #inject new targets during training
-            r = np.random.rand()
+            """ r = np.random.rand()
             if r > 0.8:
                 obj = random.choice(self.unknown_targets)
                 idx = obj['id']
                 self._add_new_tracking_target(idx)
-                obs = self._get_obs(target_id)
+                obs = self._get_obs(target_id) """
 
 
             # Info dict can include diagnostics
