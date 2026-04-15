@@ -1,4 +1,5 @@
 import os
+import time
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
@@ -9,6 +10,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import BaseCallback
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker 
+import wandb
 
 from multi_target_env import MultiTargetEnv
 from train_agent import SharedLivePlot, LivePlotCallback  
@@ -17,9 +19,10 @@ from train_agent import SharedLivePlot, LivePlotCallback
 # === CONFIG ===
 algos = ["PPO", "DQN", "Random"]
 seeds = [42, 123, 321]
-total_timesteps =100_000
+total_timesteps =50_000
 mode = "track"
-save_dir = "results"
+job_id = os.environ.get("SLURM_JOB_ID", str(int(time.time())))
+save_dir = f"results/job_{job_id}"
 os.makedirs(save_dir, exist_ok=True)
 
 
@@ -133,6 +136,19 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     else:
         raise ValueError("Unknown algorithm")
 
+    run = wandb.init(
+        entity="p-l-n-ngo-tu-delft",
+        project="single-rl",
+        name=f"{algo_name}_job{job_id}",
+        config={
+            "algo": algo_name,
+            "total_timesteps": total_timesteps,
+            "gamma": model.gamma,
+            "learning_rate": model.learning_rate,
+            "net_arch": [128, 64] if algo_name == "PPO" else [128, 128],
+        }
+    )
+
     # Create live plot callback
     callback = LivePlotCallback(
         plotter=plotter,
@@ -150,6 +166,7 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     model.save(model_path)
     print(f"[{algo_name}] Model saved to {model_path}")
 
+    run.finish()
     env.close()
 
 
@@ -206,14 +223,14 @@ def run_random_policy(plotter, color, total_timesteps, save_dir):
 
 def main():
     np.random.seed(0)
-    shared_plotter = SharedLivePlot("Agent comparison during training")
+    shared_plotter = SharedLivePlot("Agent comparison during training", job_id)
 
     # MaskablePPO (wrapped with ActionMasker)
     color_mppo = cm.get_cmap("tab10")(0)
     
     # Create the wrapper function for ActionMasker
     def make_masked_env():
-        base_env = RandomSeedEnv(seeds, mode=mode)
+        base_env = RandomSeedEnv(seeds, mode=mode, n_targets=5, n_unknown_targets=100)
         # Wrap with ActionMasker
         return ActionMasker(base_env, lambda env: env.action_masks())
     
