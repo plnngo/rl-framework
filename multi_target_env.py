@@ -1,5 +1,6 @@
 import math
 import time
+import random
 import gymnasium as gym
 import numpy as np
 from math import sqrt
@@ -386,7 +387,7 @@ class MultiTargetEnv(gym.Env):
                 reward = -1
             if self.n_targets == self.init_n_target:
                 reward += 1 """
-            reward = -trace_reward #prob_reward #iG /1e5 #scale down
+            reward = -trace_reward/self.n_targets #prob_reward #iG /1e5 #scale down
             """ # Penalty for losing targets this step
             if lost_targets:
                 obs = self._get_obs()
@@ -408,6 +409,15 @@ class MultiTargetEnv(gym.Env):
             # Termination
             done = self.step_count >= self.max_steps
             truncated = False
+
+            #inject new targets during training
+            r = np.random.rand()
+            if r > 0.8:
+                obj = random.choice(self.unknown_targets)
+                idx = obj['id']
+                self._add_new_tracking_target(idx)
+                obs = self._get_obs(target_id)
+
 
             # Info dict can include diagnostics
             info = {
