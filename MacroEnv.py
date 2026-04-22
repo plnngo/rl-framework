@@ -63,9 +63,14 @@ class MacroEnv(gym.Env):
             shape=(obs_len,),
             dtype=np.float32
         ) """
-        self.observation_space = spaces.Box(
+        """ self.observation_space = spaces.Box(
             low=np.zeros((self.max_targets, 3), dtype=np.float32),
             high=np.array([[np.inf, 1.0, 1.0]] * self.max_targets, dtype=np.float32),
+            dtype=np.float32
+        ) """
+        self.observation_space = spaces.Box(
+            low=np.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([np.inf, 1.0, np.inf, 1.0, np.inf], dtype=np.float32),
             dtype=np.float32
         )
         self.fov_size = fov_size
@@ -87,6 +92,7 @@ class MacroEnv(gym.Env):
         n_grid = max(1, int(np.floor(self.space_size / self.fov_size)))
         self.n_grid_cells = n_grid * n_grid
         self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)
+        self.recency_map = np.zeros((n_grid, n_grid), dtype=np.float32)
         self.heuristicTracker = heuristicTracker
         # --------------------
         # Micro environments (created internally)
@@ -118,6 +124,7 @@ class MacroEnv(gym.Env):
             for i in range(self.init_n_unknown_targets)
         ]
         self.visit_counts[:] = 0   # reset search visit counts
+        self.recency_map = np.zeros((int(np.sqrt(self.n_grid_cells)), int(np.sqrt(self.n_grid_cells))), dtype=np.float32)
 
         # Initialize search memory variables here
         self.last_search_idx = None
@@ -301,7 +308,9 @@ class MacroEnv(gym.Env):
             prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
             probSum += prob
 
-        macro_reward = probSum / len(self.targets)
+        macro_reward = probSum + self.recency_map.sum()/self.n_grid_cells
+        """ if macro_action == 0:
+            macro_reward += self.recency_map.sum()/self.n_grid_cells  """
         next_obs = self._get_obs()
         self.obs = next_obs
         #macro_reward = sum(next_obs)
@@ -351,14 +360,20 @@ class MacroEnv(gym.Env):
         # Compute global summary statistics first
         n_known = sum(self.known_mask)
         prob_sum = 0.0
+        min_prob = 1
         for tgt in self.targets:
             if self.known_mask[tgt["id"]]:
-                prob_sum += compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+                prob = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+                prob_sum += prob
+                if prob < min_prob:
+                    min_prob = prob
 
         gap_to_threshold = np.clip((n_known - prob_sum) / n_known, 0.0, 1.0) if n_known > 0 else 0.0
 
+        stale = self.recency_map.sum()
+
         # Build per-target features
-        features = []
+        """ features = []
         for tgt in all_targets:
             trace = np.trace(tgt["P"])
             p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
@@ -371,7 +386,9 @@ class MacroEnv(gym.Env):
             ])
 
         obs = np.stack(features, axis=0)  # shape: (num_targets, 3)
-        return obs.astype(np.float32)
+        return obs.astype(np.float32) """
+
+        return np.array([prob_sum, min_prob, n_known, gap_to_threshold, stale], dtype=np.float32)
 
         """Returns normalised sum of p_fov over known targets as a scalar."""
 
@@ -516,6 +533,8 @@ def _sync_envs(source_env, dest_env):
         None if source_env.prev_search_pos is None
         else np.copy(source_env.prev_search_pos)
     )
+    dest_env.recency_map = source_env.recency_map
+
 
     # --- Time step ---
     dest_env.step_count = source_env.step_count
