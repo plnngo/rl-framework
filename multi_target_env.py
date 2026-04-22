@@ -1,6 +1,4 @@
 import math
-import time
-import random
 import gymnasium as gym
 import numpy as np
 from math import sqrt
@@ -11,65 +9,92 @@ from sb3_contrib import MaskablePPO
 from scipy.integrate import dblquad
 
 class MultiTargetEnv(gym.Env):
-    def __init__(self, n_targets=5, n_unknown_targets = 100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined"):
+    def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined"):
         super().__init__()
+
+        # ── Target counts ──────────────────────────────────────────────────────────
+        # Store both the initial counts (used for resets) and mutable runtime counts
         self.init_n_targets = n_targets
         self.init_n_unknown_target = n_unknown_targets
-        self.n_targets = n_targets
-        self.n_unknown_targets = n_unknown_targets
-        self.mode = mode
-        self.fov_size = fov_size
-        self.space_size = space_size
-        self.d_state = d_state  # state dimension per target (e.g., x,y,vx,vy)
-        self.max_steps = max_steps
-        self.dt = 1.0          
-        self.threshold_fov = 0.5 
-        self.lost_counter = 0
-        self.detect_counter = 0
-        self.rng = np.random.default_rng(seed)
-        self.boundary = np.sqrt(2.0e-8)
+        self.n_targets = n_targets              # Known targets (observable from the start)
+        self.n_unknown_targets = n_unknown_targets  # Hidden targets discovered during episode
 
-        # generate measurement noise covariance (2x2)
-        sigma_theta = np.deg2rad(1.0)  # 1 degree bearing noise
-        sigma_r = 0.001        # 1 cm range noise
-        sigma = sigma_r
+        # ── Environment configuration ──────────────────────────────────────────────
+        self.mode = mode                        # Operating mode: "search", "track", or "combined"
+        self.fov_size = fov_size                # Side length of the square field-of-view (world units)
+        self.space_size = space_size            # Side length of the square world (world units)
+        self.d_state = d_state                  # State dimension per target: (x, y, vx, vy)
+        self.max_steps = max_steps              # Maximum timesteps before episode termination
+        self.dt = 1.0                           # Simulation timestep (seconds)
+        self.threshold_fov = 0.5               # Fraction of FOV overlap required to count as "seen"
 
-        self.R = np.diag([sigma**2, sigma**2])
+        # ── Episode diagnostics ────────────────────────────────────────────────────
+        self.lost_counter = 0                   # Tracks how many targets were lost this episode
+        self.detect_counter = 0                 # Tracks how many detections occurred this episode
 
-        # Parameters related to dynamical motion
-        self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)              # L=linear motion, T=coordinated turn
-        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets) / 10        # contains either linear velocity or turn rate
+        # ── RNG and numerical stability ────────────────────────────────────────────
+        self.rng = np.random.default_rng(seed)  # Seeded RNG for reproducibility
+        self.boundary = np.sqrt(2.0e-8)         # Small epsilon to avoid boundary singularities
 
-        # Cholesky size for covariance packing
-        self.cholesky_size = d_state * (d_state + 1) // 2
-        self.obs_dim_per_target = d_state + self.cholesky_size
-        self.max_targets = self.init_n_targets + self.init_n_unknown_target
+        # ── Measurement noise covariance (R) ──────────────────────────────────────
+        # R is a 2×2 diagonal matrix representing sensor noise in x and y
+        sigma_theta = np.deg2rad(1.0)           # Bearing noise std dev (1 degree → radians; unused directly)
+        sigma_r = 0.001                         # Range noise std dev (1 cm)
+        sigma = sigma_r                         # Active noise term (range noise used for both axes)
+        self.R = np.diag([sigma**2, sigma**2])  # Isotropic position noise covariance
 
-        # Default initial covariance for new tracks (make accessible as self.P0)
+        # ── Motion model per target ────────────────────────────────────────────────
+        # Each target is independently assigned a motion model and a corresponding parameter
+        self.motion_model = self.rng.choice(
+            ["L", "T"],
+            size=self.n_targets + self.n_unknown_targets
+        )  # "L" = linear (constant velocity), "T" = coordinated turn
+        self.motion_params = self.rng.uniform(
+            0.05, 0.3,
+            size=self.n_targets + self.n_unknown_targets
+        ) / 10  # Linear targets: speed magnitude; turn targets: turn rate (rad/s)
+
+        # ── Observation packing (Cholesky upper-triangle of covariance) ────────────
+        # The covariance matrix P (d_state × d_state) is packed into its upper-triangle
+        # to reduce observation dimensionality while retaining full covariance information
+        self.cholesky_size = d_state * (d_state + 1) // 2  # Number of upper-triangle elements
+        self.obs_dim_per_target = d_state + self.cholesky_size  # State mean + packed covariance
+        self.max_targets = self.init_n_targets + self.init_n_unknown_target  # Total possible targets
+
+        # ── Initial covariance matrices ────────────────────────────────────────────
+        # P0: initial state covariance for new tracks (high uncertainty in velocity)
         self.P0 = np.eye(self.d_state) * 0.1
-        self.P0[-2:, -2:] = np.eye(2) * 0.001
+        self.P0[-2:, -2:] = np.eye(2) * 0.001  # Lower uncertainty on the velocity components
+        # Q0: process noise covariance (models unmodelled accelerations / manoeuvres)
         self.Q0 = np.eye(self.d_state) * 1e-1
 
-        # Discretising entire field 
-        n_grid = max(1, int(np.floor(self.space_size / self.fov_size)))
-        self.n_grid_cells = n_grid * n_grid
+        # ── Spatial grid (discretised FOV coverage map) ────────────────────────────
+        # The world is divided into a uniform grid of FOV-sized cells for coverage tracking
+        n_grid = max(1, int(np.floor(self.space_size / self.fov_size)))  # Cells per axis
+        self.n_grid_cells = n_grid * n_grid                              # Total cell count
 
-        x_vals = np.linspace(-self.space_size / 2 + self.fov_size / 2,
-                            self.space_size / 2 - self.fov_size / 2,
-                            n_grid)
-        y_vals = np.linspace(-self.space_size / 2 + self.fov_size / 2,
-                            self.space_size / 2 - self.fov_size / 2,
-                            n_grid)
-        self.grid_coords = np.array([[x, y] for x in x_vals for y in y_vals])
-        self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)
+        # Cell centres, offset inward by half a FOV so cells don't exceed world bounds
+        x_vals = np.linspace(
+            -self.space_size / 2 + self.fov_size / 2,
+            self.space_size / 2 - self.fov_size / 2,
+            n_grid
+        )
+        y_vals = np.linspace(
+            -self.space_size / 2 + self.fov_size / 2,
+            self.space_size / 2 - self.fov_size / 2,
+            n_grid
+        )
+        self.grid_coords = np.array([[x, y] for x in x_vals for y in y_vals])  # (n_grid_cells, 2)
+        self.visit_counts = np.zeros(self.n_grid_cells, dtype=int)              # Times each cell visited
 
-        # Initialise maps as 2D
-        self.detection_history = np.zeros((n_grid, n_grid), dtype=np.float32)
-        self.recency_map = np.zeros((n_grid, n_grid), dtype=np.float32)
-        self.roi_mask = self._build_roi_mask()
+        # ── Spatial information maps ───────────────────────────────────────────────
+        self.detection_history = np.zeros((n_grid, n_grid), dtype=np.float32)  # Cumulative detection density
+        self.recency_map = np.zeros((n_grid, n_grid), dtype=np.float32)        # Decay-weighted recency of visits
+        self.roi_mask = self._build_roi_mask()                                  # Binary mask of regions of interest
 
+        # ── Observation space ──────────────────────────────────────────────────────
         if mode == "search":
-            # Observation shape becomes (4, n_grid, n_grid) — four information channels
+            # Four spatial channels stacked: e.g. visit density, recency, ROI mask, and one more
             self.observation_space = gym.spaces.Box(
                 low=0.0, high=1.0,
                 shape=(4, n_grid, n_grid),
@@ -77,31 +102,29 @@ class MultiTargetEnv(gym.Env):
             )
 
         if mode == "track":
-            self.obs_dim_per_target = 2   # trace, probability
-
+            # Each target is represented by two scalars: filter trace and existence probability
+            self.obs_dim_per_target = 2
             self.observation_space = gym.spaces.Box(
-                low=0.0, 
-                high=np.inf,
+                low=0.0, high=np.inf,
                 shape=(self.max_targets, self.obs_dim_per_target),
                 dtype=np.float32
             )
 
-        # ACTION space (flat form)
+        # ── Action space ───────────────────────────────────────────────────────────
         if self.mode == "search":
-            # search actions 
-            self.n_actions = self.n_grid_cells
+            self.n_actions = self.n_grid_cells          # Select which grid cell to visit next
         elif self.mode == "track":
-            # track actions 
-            self.n_actions = self.max_targets
-        else:  # "combined"
-            # depreciated
+            self.n_actions = self.max_targets           # Select which target to focus the sensor on
+        else:  # "combined" — deprecated, kept for backwards compatibility
             self.n_actions = self.n_grid_cells + self.max_targets
 
         self.action_space = gym.spaces.Discrete(self.n_actions)
 
-        # known mask
+        # ── Known/unknown target mask ──────────────────────────────────────────────
+        # Boolean mask indicating which slots in the target array correspond to known targets;
+        # the remainder are unknown targets that may be discovered during the episode
         self.known_mask = np.zeros(self.max_targets, dtype=bool)
-        self.known_mask[:self.n_targets] = True
+        self.known_mask[:self.n_targets] = True  # First n_targets slots are known at episode start
 
         self.reset(seed=seed)
 
@@ -116,41 +139,59 @@ class MultiTargetEnv(gym.Env):
         return mask
     
     def reset(self, *, seed=None, options=None):
-        super().reset(seed=seed)
+        super().reset(seed=seed)  # Propagate seed to the parent Gym environment
 
-        self.step_count = 0
-        self.n_targets = self.init_n_targets
-        self.n_unknown_targets = self.init_n_unknown_target
-        self.lost_counter = 0
-        self.detect_counter = 0
+        # ── Episode counters ───────────────────────────────────────────────────────
+        self.step_count = 0                                 # Current timestep within the episode
+        self.n_targets = self.init_n_targets                # Restore known target count to initial value
+        self.n_unknown_targets = self.init_n_unknown_target # Restore unknown target count to initial value
+        self.lost_counter = 0                               # Reset lost-target tally
+        self.detect_counter = 0                             # Reset detection event tally
 
-        #reset dynamics
-        self.motion_model = self.rng.choice(["L", "T"], size=self.n_targets + self.n_unknown_targets)       # L=linear motion, T=coordinated turn
-        self.motion_params = self.rng.uniform(0.05, 0.3, size=self.n_targets + self.n_unknown_targets) 
+        # ── Motion model re-sampling ───────────────────────────────────────────────
+        # Re-draw motion models and parameters each episode so targets behave differently per run
+        self.motion_model = self.rng.choice(
+            ["L", "T"],
+            size=self.n_targets + self.n_unknown_targets
+        )  # "L" = linear (constant velocity), "T" = coordinated turn
+        self.motion_params = self.rng.uniform(
+            0.05, 0.3,
+            size=self.n_targets + self.n_unknown_targets
+        )  # Speed magnitude (L) or turn rate in rad/s (T)
 
+        # ── Target initialisation ──────────────────────────────────────────────────
+        # Known targets occupy indices [0, init_n_targets);
+        # unknown targets are offset so their indices don't collide with known ones
         self.targets = [self._init_target(i) for i in range(self.init_n_targets)]
         self.unknown_targets = [
             self._init_unknown_target(i + self.init_n_targets)
             for i in range(self.init_n_unknown_target)
         ]
-        self.visit_counts[:] = 0   # reset search visit counts
-        self.detection_history[:] = 0.0
-        self.recency_map[:] = 0.0
 
-        self.episode_detection_reward = 0.0
-        self.episode_roi_reward = 0.0
-        self.episode_n_detections = 0
+        # ── Spatial coverage maps ──────────────────────────────────────────────────
+        self.visit_counts[:] = 0        # Number of times each grid cell has been visited
+        self.detection_history[:] = 0.0 # Cumulative detection density per cell
+        self.recency_map[:] = 0.0       # Decay-weighted recency of visits per cell
 
-        # Initialize search memory variables here
-        self.last_search_idx = None
-        self.prev_search_pos = None
+        # ── Episode reward accumulators ────────────────────────────────────────────
+        # These track reward breakdowns for logging/diagnostics, not for training
+        self.episode_detection_reward = 0.0  # Total reward earned from detections
+        self.episode_roi_reward = 0.0        # Total reward earned from visiting ROI cells
+        self.episode_n_detections = 0        # Total number of detection events this episode
 
-        # known mask
+        # ── Search memory ──────────────────────────────────────────────────────────
+        # Used to compute step-to-step search displacement rewards or avoid revisits
+        self.last_search_idx = None   # Grid index of the most recent search action
+        self.prev_search_pos = None   # World-space position of the most recent search action
+
+        # ── Known/unknown target mask ──────────────────────────────────────────────
+        # Rebuild from scratch each reset; first n_targets slots are known at episode start
         self.known_mask = np.zeros(self.max_targets, dtype=bool)
         self.known_mask[:self.n_targets] = True
 
+        # ── Initial observation ────────────────────────────────────────────────────
         self.obs = self._get_obs()
-        info = {}  # optional
+        info = {}  # Placeholder — populate with diagnostics if needed by wrappers
         return self.obs, info
     
     # Action decoding logic 
@@ -205,135 +246,119 @@ class MultiTargetEnv(gym.Env):
             raise ValueError(f"Invalid macro action: {macro}")
 
     def step(self, action):
+        # ── Action decoding ────────────────────────────────────────────────────────
+        # Decode the flat action into a macro choice (SEARCH vs TRACK) and the
+        # corresponding micro-action (grid cell index or target id)
         macro, micro_search, micro_track = self.decode_action(action)
         micro = [0., 0.]
         target_id = []
         search_pos = None
-        n_grid = int(np.sqrt(self.n_grid_cells))
+        n_grid = int(np.sqrt(self.n_grid_cells))  # Grid side length (cells per axis)
 
-        if macro == 0:  # SEARCH
+        if macro == 0:  # SEARCH: agent chose to move the sensor to a grid cell
             grid_idx = micro_search
-            search_pos = self.grid_coords[grid_idx]
-
+            search_pos = self.grid_coords[grid_idx]  # World-space centre of chosen cell
             micro = search_pos
-        else:  # TRACK
-            target_id.append(micro_track) 
+        else:           # TRACK: agent chose to update a specific known target
+            target_id.append(micro_track)
             micro = micro_track
 
-        # Initialise reward
-        total_iG = 0.0
+        # ── Reward component initialisation ───────────────────────────────────────
+        total_iG = 0.0        # Accumulated information gain (or detection bonus) this step
+        lost_reward = 0.0     # Penalty contribution from lost targets (currently unused)
+        prob_reward = 0.0     # Reward from in-FOV probability of the tracked target
+        lost = 0              # Binary flag: tracked target considered lost (1) or not (0)
+        lost_targets = []     # Targets dropped from tracking this step
+        trace_reward = 0      # Net change in total covariance trace (pre- minus post-update)
 
-        # reward related to neglected known targets
-        lost_reward = 0.0
-        prob_reward = 0.0
-        lost = 0
-        lost_targets = []
-
-        trace_reward = 0
-
-        # decay recency map
+        # ── Recency map decay ──────────────────────────────────────────────────────
+        # Exponential decay ensures older visits contribute less to the recency signal
         self.recency_map *= 0.99
-            
-        # propagate all known targets
-        for tgt in self.targets:
 
-            idx = tgt['id']  # global index
+        # ── Known target propagation ───────────────────────────────────────────────
+        # Advance each known target's state estimate forward by one timestep,
+        # then optionally apply an EKF measurement update if this target was tracked
+        for tgt in self.targets:
+            idx = tgt['id']
             model = self.motion_model[idx]
             param = self.motion_params[idx]
 
-            # retrieve predictions by propagating each known target
-            tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(tgt['x'], tgt['P'], tgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
-            trace_reward += np.trace(tgt['P']) 
+            # Propagate state and covariance using the target's assigned motion model
+            tgt['x'], tgt['P'] = MultiTargetEnv.propagate_target_2D(
+                tgt['x'], tgt['P'], tgt.get('Q', self.Q0),
+                dt=self.dt, rng=self.rng,
+                motion_model=model, motion_param=param
+            )
+            trace_reward += np.trace(tgt['P'])  # Accumulate pre-update trace contribution
 
-            # compute measurement related to action
             if target_id and idx == micro:
-                trace_reward -= np.trace(tgt['P']) 
-                xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
-                #iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
-                #prob = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
-                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
-                #print(iG)
-                #print(probFull)
-                #print(probFull - prob)
-                # Update
+                # ── EKF update for the actively tracked target ─────────────────────
+                # Subtract pre-update trace, apply measurement update, add post-update
+                # trace; the net difference reflects the information gained this step
+                trace_reward -= np.trace(tgt['P'])
+                xUpdate, PUpdate = MultiTargetEnv.ekf_update(
+                    tgt['x'], tgt['P'], self.R,
+                    MultiTargetEnv.extract_measurement_XY
+                )
                 tgt['x'], tgt['P'] = xUpdate, PUpdate
-                trace_reward += np.trace(tgt['P']) 
+                trace_reward += np.trace(tgt['P'])
 
-                #total_iG = iG
-                
+                # Probability that the target remains within the sensor boundary post-update
                 prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
-                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
-                #print(prob)
-                #print(probFull)
-                #print(probFull - prob)
                 prob_reward += prob
-                lost = 1 - prob
-                if lost>total_iG:
-                    total_iG = lost_reward
+                lost = 1 - prob  # High lost value --> target likely escaped the FOV
 
-            # Otherwise: compute FOV-probability reward for this neglected target
+
             else:
-                #probInt = MultiTargetEnv.compute_fov_prob_full(tgt['P'], self.fov_size, self.fov_size)
-                #prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
+                # ── Neglected target: check whether it has drifted out of FOV ──────
+                # Use the full FOV size (not boundary) for the maintenance probability check
                 probMaintainFOV = compute_fov_prob_single(self.fov_size, tgt['x'], tgt['P'])
 
-                #print(1-prob)
-                """ if (1-prob)>total_iG:
-                    total_iG = 1-prob
-                prob_reward += prob """
-                #xUpdate, PUpdate = MultiTargetEnv.ekf_update(tgt['x'], tgt['P'], self.R, MultiTargetEnv.extract_measurement_XY)
-                #iG = MultiTargetEnv.compute_kl_divergence(tgt['x'], tgt['P'], xUpdate, PUpdate)
-                #print(prob)
-                if probMaintainFOV<self.threshold_fov:
-                    # target is considered as lost
+                if probMaintainFOV < self.threshold_fov:
+                    # Target covariance has grown so large it is unlikely to be in FOV;
+                    # mark as lost and remove from the active tracking list
                     lost_targets.append(tgt)
                     self._remove_lost_tracking_target(idx)
 
-        # propagate unknowns
+        # ── Unknown target propagation ─────────────────────────────────────────────
+        # Unknown targets are propagated but never updated (no measurements taken);
+        # they may later be promoted to known targets via a detection event
         for utgt in self.unknown_targets:
-
             idx = utgt['id']
             model = self.motion_model[idx]
             param = self.motion_params[idx]
 
-            # retrieve predictions by propagating each unknown target
-            utgt['x'], utgt['P'] = MultiTargetEnv.propagate_target_2D(utgt['x'], utgt['P'], utgt.get('Q', self.Q0), dt=self.dt, rng=self.rng, motion_model=model, motion_param=param)
+            utgt['x'], utgt['P'] = MultiTargetEnv.propagate_target_2D(
+                utgt['x'], utgt['P'], utgt.get('Q', self.Q0),
+                dt=self.dt, rng=self.rng,
+                motion_model=model, motion_param=param
+            )
 
-        # If TRACK macro, return here            
-        if target_id:       
-            # Construct next observation
+        # ══ TRACK macro: early return ══════════════════════════════════════════════
+        if target_id:
             obs = self._get_obs(target_id)
             self.step_count += 1
 
-            # Check validity
+            # Guard: penalise heavily if agent tries to track an unknown target
             if self.known_mask[target_id]:
                 invalid_action = False
             else:
                 invalid_action = True
-                # Invalid track (e.g., unknown target) -->  return with action mask so agent can correct
-                info = {"invalid_action": invalid_action, "action_mask": self.action_masks(), "lost_target": lost_targets}
-                # Termination
+                info = {
+                    "invalid_action": invalid_action,
+                    "action_mask": self.action_masks(),
+                    "lost_target": lost_targets
+                }
                 done = self.step_count >= self.max_steps
-                return obs, -10.0, done, False, info
+                return obs, -10.0, done, False, info  # Hard penalty for invalid track action
 
-            # Simple reward = total information gain (KL) or punishment for loosing target
-            
-            reward = -trace_reward/self.n_targets #prob_reward #iG /1e5 #scale down
-            
-            # Termination
+            # Reward is the negative mean covariance trace across all known targets
+            # (lower trace = tighter estimates = better tracking performance)
+            reward = -trace_reward / self.n_targets
+
             done = self.step_count >= self.max_steps
             truncated = False
 
-            #inject new targets during training
-            """ r = np.random.rand()
-            if r > 0.8:
-                obj = random.choice(self.unknown_targets)
-                idx = obj['id']
-                self._add_new_tracking_target(idx)
-                obs = self._get_obs(target_id) """
-
-
-            # Info dict can include diagnostics
             info = {
                 "macro": macro,
                 "micro": micro,
@@ -341,99 +366,100 @@ class MultiTargetEnv(gym.Env):
                 "reward_info_gain": total_iG,
                 "action_mask": self.action_masks(),
                 "lost_target": lost_targets,
-                "n_known": np.sum(self.known_mask),  # Track this!
+                "n_known": np.sum(self.known_mask),
                 "n_lost_this_step": len(lost_targets),
                 "detect_counter": self.detect_counter,
                 "lost_counter": self.lost_counter
             }
             self.obs = obs
-
             return obs, reward, done, truncated, info
 
-        # SEARCH macro: Check detections
+        # ══ SEARCH macro ═══════════════════════════════════════════════════════════
+
+        # ── FOV detection sweep ────────────────────────────────────────────────────
+        # Check which targets (known or unknown) fall inside the square FOV
+        # centred on the chosen search position
         detections = []
         fov_halfWidth = self.fov_size / 2.0
         for obj in self.targets + self.unknown_targets:
-
             try:
                 dx = obj['x'][0] - search_pos[0]
                 dy = obj['x'][1] - search_pos[1]
                 if abs(dx) <= fov_halfWidth and abs(dy) <= fov_halfWidth:
                     detections.append(obj)
             except Exception as e:
-                # Catch internal failure
+                # Malformed target state — return immediately with a strong penalty
                 obs = self._get_obs() if hasattr(self, "_get_obs") else self.observation_space.sample()
-
-                reward = -100.0  # strong penalty for failure
-                terminated = True
-                truncated = False
-
                 info = {
                     "exception": str(e),
                     "exception_type": type(e).__name__,
                 }
+                return obs, -100.0, True, False, info
 
-                return obs, reward, terminated, truncated, info
-
-        # Convert flat grid_idx to 2D coordinates
+        # Convert flat grid index to 2D map coordinates for history/recency updates
         x_index = grid_idx // n_grid
         y_index = grid_idx % n_grid
 
+        # ── Detection check (Mahalanobis gating) ─────────────────────────────
+        # A detection is considered "new" if it is statistically far from every
+        # currently tracked target; new detections promote an unknown to known
         if len(detections) > 0:
-            threshold = 3.0  # example Mahalanobis threshold
+            threshold = 3.0  # Mahalanobis distance gate (standard deviations)
             for det in detections:
                 distances = [
                     mahalanobis_distance(det['x'], known['x'], known['P'])
                     for known in self.targets
                 ]
-                # If all distances > threshold --> new detection
                 if all(d > threshold for d in distances):
-                    total_iG += 10.0
-                    # Promote detection to a new known target
+                    total_iG += 10.0  # Bonus reward for discovering a new target
                     self._add_new_tracking_target(det['id'])
                     target_id.append(det['id'])
+                    # Cap detection density at 1.0 to keep the map normalised
                     self.detection_history[x_index, y_index] = min(
                         self.detection_history[x_index, y_index] + 1.0, 1.0
                     )
-                    
-        # Update recency map mark current location
-        self.recency_map[x_index, y_index] = 1.0
 
-        # Update detection history — decay everything
-        self.detection_history *= 0.95
-        self.visit_counts[grid_idx] += 1
+        # ── Coverage map updates ───────────────────────────────────────────────────
+        self.recency_map[x_index, y_index] = 1.0   # Mark cell as freshly visited
+        self.detection_history *= 0.95              # Decay historical detections toward zero
+        self.visit_counts[grid_idx] += 1            # Increment raw visit counter for this cell
+
         reward = total_iG
-        
+
+        # Cache last search position for use by _get_obs or reward shaping next step
         self.last_search_idx = grid_idx
         self.prev_search_pos = search_pos
 
-        # Upper-half bonus
+        # ── Exploration bonus ──────────────────────────────────────────────────────
+        # Small additive bonus for visiting cells in the upper half of the world;
+        # acts as a soft prior to encourage coverage of the ROI
         exploration_bonus = 0
-        if search_pos[1] > 0:  # cell in upper half
-            exploration_bonus += 1.0   
+        if search_pos[1] > 0:
+            exploration_bonus += 1.0
+        # note: exploration_bonus is accumulated into episode stats but not added to `reward` - it was added before but this guides the agent too much to a biased behaviour
 
-        # Accumulate episode stats
+        # ── Episode statistic accumulators ────────────────────────────────────────
         self.episode_detection_reward += total_iG
         self.episode_roi_reward += exploration_bonus
         self.episode_n_detections += len(detections)
 
-        # Construct next observation
+        # ── Construct return values ────────────────────────────────────────────────
         obs = self._get_obs()
-
-        # Termination
         self.step_count += 1
-        done = (self.step_count >= self.max_steps)
+        done = self.step_count >= self.max_steps
         truncated = False
 
-        # Info dict can include diagnostics
-        info = {"macro": macro, "micro": micro, 
-                "target_id": target_id, 
-                "reward_info_gain": total_iG, 
-                "action_mask": self.action_masks(), 
-                "lost_target": lost_targets, 
-                "episode_detection_reward": self.episode_detection_reward,
-                "episode_roi_reward": self.episode_roi_reward,
-                "episode_n_detections": self.episode_n_detections}
+        info = {
+            "macro": macro,
+            "micro": micro,
+            "target_id": target_id,
+            "reward_info_gain": total_iG,
+            "action_mask": self.action_masks(),
+            "lost_target": lost_targets,
+            "episode_detection_reward": self.episode_detection_reward,
+            "episode_roi_reward": self.episode_roi_reward,
+            "episode_n_detections": self.episode_n_detections
+        }
         self.obs = obs
 
         return obs, reward, done, truncated, info
@@ -486,59 +512,61 @@ class MultiTargetEnv(gym.Env):
 
     def _get_obs(self, target_id=None):
         """Flatten all target states and covariances into one observation vector."""
-        if self.mode=="search":
-            n_grid = int(np.sqrt(self.n_grid_cells))
+
+        # ══ SEARCH mode observation ════════════════════════════════════════════════
+        # Returns a (4, n_grid, n_grid) tensor — one spatial channel per information source
+        if self.mode == "search":
+            n_grid = int(np.sqrt(self.n_grid_cells))  # Grid side length (cells per axis)
+
             # Channel 1 — normalised visit counts
+            # Log-scaled so frequently visited cells don't dominate; +1 avoids log(0)
             visit_2d = self.visit_counts.reshape(n_grid, n_grid).astype(np.float32)
-            visit_map = np.log1p(visit_2d) / np.log1p(visit_2d.max() + 1)
-            
-            # Channel 2 — recent detection map (decaying sum of past detections)
-            # Set to 1.0 where detection occurred, decay by 0.95 each step
+            visit_map = np.log1p(visit_2d) / np.log1p(visit_2d.max() + 1)  # Range: [0, 1]
+
+            # Channel 2 — detection history (decaying sum of past detections)
+            # Set to 1.0 on detection; decayed by ×0.95 each step in step()
             detection_map = self.detection_history.copy()
 
-            # Channel 3 — recency map (1.0 = pointed here last step, decays over time)
+            # Channel 3 — recency map (1.0 = visited last step, exponentially decays at ×0.99/step)
             recency_map = self.recency_map.copy()
 
-            # Channel 4 — ROI mask (static, 1.0 inside ROI, 0.0 outside)
+            # Channel 4 — ROI mask (static binary map: 1.0 inside region of interest, 0.0 outside)
             roi_map = self.roi_mask.copy()
 
+            # Stack channels along axis 0 → shape: (4, n_grid, n_grid)
             return np.stack([
-                visit_map,                  
-                detection_map,    
-                recency_map,           
-                roi_map,              
+                visit_map,      # How often has this cell been visited?
+                detection_map,  # Where have detections historically occurred?
+                recency_map,    # How recently was this cell visited?
+                roi_map,        # Is this cell inside the region of interest?
             ], axis=0).astype(np.float32)
 
-        # observation for tracking mode
+        # ══ TRACK mode observation ══════════════════════════════════════════════════
+        # Returns a (max_targets, 2) array — one row per target slot, two features per target
+
+        # Build a unified lookup of all targets (known + unknown) keyed by global id
         by_id = {t["id"]: t for t in self.targets}
         by_id.update({t["id"]: t for t in self.unknown_targets})
 
+        # Sort by id so the observation rows are always in a consistent order
         all_targets = [by_id[k] for k in sorted(by_id)]
 
         features = []
-
         for tgt in all_targets:
-            trace = np.trace(tgt["P"])
-            p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
-            known = 1.0 if self.known_mask[tgt["id"]] else 0.0
+            trace = np.trace(tgt["P"])   # Scalar uncertainty measure: sum of state variances
+            p_fov = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])  # P(target inside FOV)
+            known = 1.0 if self.known_mask[tgt["id"]] else 0.0  # Mask: 0.0 zeroes out unknown targets
 
+            # Unknown targets contribute zeros so the agent cannot exploit their hidden state;
+            # known targets expose their trace and FOV probability as tracking quality signals
             features.append([
-                trace * known,
-                p_fov * known
+                trace * known,  # Covariance trace (0.0 if unknown)
+                p_fov * known   # FOV containment probability (0.0 if unknown)
             ])
 
-        obs = np.stack(features, axis=0)  # shape: (num_targets, 2)
+        obs = np.stack(features, axis=0)  # shape: (max_targets, 2)
         return obs.astype(np.float32)
-        
-    def sample_track_action(self):
-        """Sample a valid tracking action from currently known targets."""
-        valid_ids = np.where(self.known_mask)[0]
-        if len(valid_ids) == 0:
-            # fallback: no known targets yet, pick random valid grid cell instead
-            return {"macro": 0, "micro_search": int(self.rng.integers(self.n_grid_cells)), "micro_track": 0}
-        target_id = int(self.rng.choice(valid_ids))
-        return {"macro": 1, "micro_search": 0, "micro_track": target_id}
-    
+            
     def _add_new_tracking_target(self, unknown_idx):
         """Promote unknown_targets[unknown_idx] into known targets."""
         if len(self.targets) >= self.max_targets:
