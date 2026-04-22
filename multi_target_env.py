@@ -287,6 +287,9 @@ class MultiTargetEnv(gym.Env):
         trace_reward = 0
         # propagate all known targets
         start = time.perf_counter()
+
+        # decay recency map
+        self.recency_map *= 0.99
             
         for tgt in self.targets:
 
@@ -484,8 +487,7 @@ class MultiTargetEnv(gym.Env):
                     )
                     
         # --- SEARCH macro: update visit counts and compute reward ---
-        # Update recency map — decay everything, then mark current location
-        self.recency_map *= 0.99
+        # Update recency map mark current location
         self.recency_map[x_index, y_index] = 1.0
 
         # Update detection history — decay everything
