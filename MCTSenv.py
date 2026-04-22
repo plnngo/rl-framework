@@ -293,7 +293,8 @@ class MCTS:
             self._backprop(path, reward_vec)
 
         # Pick action with highest visit count
-        best_node = max(root.children.values(), key=lambda node: node.visit_count)
+        #best_node = max(root.children.values(), key=lambda node: node.visit_count)
+        best_node = self.select_best_root_child(root)
         return best_node
     
     def reset_tree(self, obs):
@@ -309,6 +310,28 @@ class MCTS:
                 return new_root
         # start a new tree if the branch wasn’t expanded
         return MCTSNode(env=None)
+
+    def select_best_root_child(self, root):
+        children = list(root.children.values())
+
+        vecs = []
+        for child in children:
+            if child.value_vec is not None and child.visit_count > 0:
+                avg_vec = child.value_vec / child.visit_count
+            else:
+                avg_vec = np.zeros(self.n_objectives)
+
+            vecs.append([avg_vec[0], np.sum(avg_vec[1:])])
+
+        pareto_children = []
+        for i, v in enumerate(vecs):
+            others = vecs[:i] + vecs[i+1:]
+            dominating = self._get_dominating_vecs(others, v, maximize=[True, True])
+            if len(dominating) == 0:
+                pareto_children.append(children[i])
+
+        # tie-break: visits
+        return max(pareto_children, key=lambda node: node.visit_count)
 
     def visualize_mcts_tree(self, root, max_depth=3, highlight_best=True):
         """
