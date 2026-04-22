@@ -748,6 +748,15 @@ def evaluate_agent_search(env, model=None, n_episodes=100, random_policy=False, 
 
     return rewards, detection_count
 
+def computeKL():
+    mean_1 = np.array([0])
+    mean_2 = np.array([0])
+
+    cov_1 = np.array([1])
+    cov_2 = np.array([1])
+    kl_value = MultiTargetEnv.compute_kl_divergence(mean_1, cov_1, mean_2, cov_2)
+    print(kl_value)
+
 @staticmethod
 def plot_violin(results_dict, ylabel="Episode Reward"):
     """
@@ -2713,5 +2722,6 @@ if __name__ == "__main__":
     #main()
     #kalmanPlots()
     #rmsePlot()
-    efficiencyPlot()
+    #efficiencyPlot()
     #efficiencyOtherPlot()
+    computeKL()
