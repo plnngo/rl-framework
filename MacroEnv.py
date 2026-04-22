@@ -46,28 +46,6 @@ class MacroEnv(gym.Env):
         self.boundary = np.sqrt(1.0e-2)
         self._last_prob_sum = 0.0
         
-        """ self.observation_space = spaces.Box(
-            low=np.array([0.0, -1.0]),
-            high=np.array([1.0,  1.0]),
-            dtype=np.float32
-        ) """
-        """ self.observation_space = gym.spaces.Box(
-                low=0.0, 
-                high=np.inf,
-                shape=(self.max_targets, self.obs_dim_per_target),
-                dtype=np.float32
-            ) """
-        """ self.observation_space = gym.spaces.Box(
-            low=-1.0, 
-            high=1.0,
-            shape=(obs_len,),
-            dtype=np.float32
-        ) """
-        """ self.observation_space = spaces.Box(
-            low=np.zeros((self.max_targets, 3), dtype=np.float32),
-            high=np.array([[np.inf, 1.0, 1.0]] * self.max_targets, dtype=np.float32),
-            dtype=np.float32
-        ) """
         self.observation_space = spaces.Box(
             low=np.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32),
             high=np.array([np.inf, 1.0, np.inf, 1.0, np.inf], dtype=np.float32),
