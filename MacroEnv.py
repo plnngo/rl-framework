@@ -81,6 +81,8 @@ class MacroEnv(gym.Env):
         else: """
         self.track_env  = track_agent.get_env().envs[0]
 
+        self.dt = self.search_env.env.dt
+
     # ---------------------------------------------------------------------
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -280,16 +282,19 @@ class MacroEnv(gym.Env):
             _sync_envs(real_track_env, self)
 
         # Compute macro reward
-        probSum = 0
+        """ probSum = 0
         for tgt in self.targets:
 
             prob = compute_fov_prob_single(self.boundary, tgt['x'], tgt['P'])
             probSum += prob
 
-        macro_reward = probSum + self.recency_map.sum()/self.n_grid_cells
+        macro_reward = probSum + self.recency_map.sum()/self.n_grid_cells """
         """ if macro_action == 0:
             macro_reward += self.recency_map.sum()/self.n_grid_cells  """
         next_obs = self._get_obs()
+        predProbSum = next_obs[0]
+        predStale = next_obs[4]/self.n_grid_cells
+        macro_reward = predProbSum + predStale
         self.obs = next_obs
         #macro_reward = sum(next_obs)
         """ if info["lost_target"]:
@@ -311,7 +316,7 @@ class MacroEnv(gym.Env):
 
     # ---------------------------------------------------------------------
     def _get_obs(self, target_id=None):
-        """Extracts target covariance trace."""
+        """Propagate state to next time step and extract [probSum, minProb, number of targets, gap to threshold, stale]."""
 
         """ known_by_id = {t["id"]: t for t in self.targets}
 
@@ -330,25 +335,31 @@ class MacroEnv(gym.Env):
 
         return np.array(obs_list, dtype=np.float32) """
 
-        by_id = {t["id"]: t for t in self.targets}
-        by_id.update({t["id"]: t for t in self.unknown_targets})
-
-        all_targets = [by_id[k] for k in sorted(by_id)]
-
         # Compute global summary statistics first
         n_known = sum(self.known_mask)
         prob_sum = 0.0
         min_prob = 1
         for tgt in self.targets:
             if self.known_mask[tgt["id"]]:
-                prob = compute_fov_prob_single(self.boundary, tgt["x"], tgt["P"])
+                idx = tgt['id']
+                model = self.motion_model[idx]
+                param = self.motion_params[idx]
+
+                # Propagate state and covariance using the target's assigned motion model
+                predtgtX, predtgtP = MultiTargetEnv.propagate_target_2D(
+                    tgt['x'], tgt['P'], tgt.get('Q', self.Q0),
+                    dt=self.dt, rng=self.rng,
+                    motion_model=model, motion_param=param
+                )
+                prob = compute_fov_prob_single(self.boundary, predtgtX, predtgtP)
                 prob_sum += prob
                 if prob < min_prob:
                     min_prob = prob
 
         gap_to_threshold = np.clip((n_known - prob_sum) / n_known, 0.0, 1.0) if n_known > 0 else 0.0
 
-        stale = self.recency_map.sum()
+        # project decay of recency map in future time step
+        stale = self.recency_map.sum() * 0.99
 
         # Build per-target features
         """ features = []
