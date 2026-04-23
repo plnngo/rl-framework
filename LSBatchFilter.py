@@ -2,7 +2,6 @@ from matplotlib import pyplot as plt
 import numpy as np
 from scipy.optimize import least_squares
 from scipy.integrate import solve_ivp
-import inspect
 
 from multi_target_env import MultiTargetEnv
 
