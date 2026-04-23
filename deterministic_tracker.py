@@ -80,9 +80,7 @@ def select_best_action_pFOV(env, dt=None, fov=4):
         
     # randomly choose among the tied best targets
     best_target_id, x_best, P_best = random.choice(best_targets)
-    #print(highest_prob)
-    if len(best_targets) > 1:
-            print("Random")
+
     best_update = {"x": x_best, "P": P_best}
 
     return best_target_id, best_ig, best_update
@@ -240,8 +238,6 @@ def select_best_action_IG(env, dt=None):
             best_targets.append((idx, x_upd, P_upd))
 
     # Random tie-break
-    if len(best_targets) == 5:
-            print("random")
     best_target_id, x_best, P_best = random.choice(best_targets)
     best_update = {"x": x_best, "P": P_best}
 
