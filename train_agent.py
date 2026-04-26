@@ -7,6 +7,7 @@ import wandb
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from multi_target_env import MultiTargetEnv
+import torch as th
 
 
 # =========================================================
@@ -22,6 +23,17 @@ class SharedLivePlot:
         self.ax.set_title(title)
         self.job = jobid
 
+        # DQN metrics figure
+        self.fig_dqn, (self.ax_loss, self.ax_eps, self.ax_q) = plt.subplots(1, 3, figsize=(18, 4))
+        self.ax_loss.set_title("TD Loss over Training")
+        self.ax_loss.set_xlabel("Timesteps")
+        self.ax_loss.set_ylabel("Loss")
+        self.ax_eps.set_title("Exploration Rate (epsilon)")
+        self.ax_eps.set_xlabel("Timesteps")
+        self.ax_q.set_title("Mean Q-Value over Training")
+        self.ax_q.set_xlabel("Timesteps")
+        self.dqn_lines = {}
+
         self.fig_adv, (self.ax_adv_mean, self.ax_adv_std) = plt.subplots(1, 2, figsize=(12, 4))
         self.ax_adv_mean.set_title("Mean Advantage over Training")
         self.ax_adv_mean.set_xlabel("Timesteps")
@@ -36,6 +48,23 @@ class SharedLivePlot:
         self.lines[name] = {"line": line, "timesteps": [], "rewards": []}
         self.ax.legend()
 
+    def register_dqn_line(self, name, color):
+        line_loss, = self.ax_loss.plot([], [], color=color, label=name)
+        line_eps,  = self.ax_eps.plot([], [], color=color, label=name)
+        line_q,    = self.ax_q.plot([], [], color=color, label=name)
+        self.dqn_lines[name] = {
+            "line_loss": line_loss,
+            "line_eps": line_eps,
+            "line_q": line_q,
+            "timesteps": [],
+            "loss": [],
+            "eps": [],
+            "q": []
+        }
+        self.ax_loss.legend()
+        self.ax_eps.legend()
+        self.ax_q.legend()
+
     def register_advantage_line(self, name, color):
         line_mean, = self.ax_adv_mean.plot([], [], color=color, label=name)
         line_std,  = self.ax_adv_std.plot([], [], color=color, label=name)
@@ -49,7 +78,7 @@ class SharedLivePlot:
         self.ax_adv_mean.legend()
         self.ax_adv_std.legend()
 
-    def update(self, name, episode_reward, episode_length):   # ← was missing
+    def update(self, name, episode_reward, episode_length):  
         data = self.lines[name]
         data["timesteps"].append(episode_length)
         data["rewards"].append(episode_reward)
@@ -59,6 +88,21 @@ class SharedLivePlot:
         self.ax.autoscale_view()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
+
+    def update_dqn(self, name, timestep, loss, eps, q_value):
+        data = self.dqn_lines[name]
+        data["timesteps"].append(timestep)
+        data["loss"].append(loss)
+        data["eps"].append(eps)
+        data["q"].append(q_value)
+        data["line_loss"].set_data(data["timesteps"], data["loss"])
+        data["line_eps"].set_data(data["timesteps"], data["eps"])
+        data["line_q"].set_data(data["timesteps"], data["q"])
+        for ax in [self.ax_loss, self.ax_eps, self.ax_q]:
+            ax.relim()
+            ax.autoscale_view()
+        self.fig_dqn.canvas.draw()
+        self.fig_dqn.canvas.flush_events()
 
     def update_advantages(self, name, timestep, mean_adv, std_adv):
         data = self.adv_lines[name]
@@ -83,13 +127,13 @@ class SharedLivePlot:
         self.ax.legend()
         self.fig.savefig(f"episode_rewards_job_{self.job}.pdf")
         self.fig_adv.savefig(f"advantage_log_job_{self.job}.pdf")
+        self.fig_dqn.savefig(f"dqn_metrics_job_{self.job}.pdf")
         #plt.show()
-
 
 # =========================================================
 # PPO Callback with Live Plotting
 # =========================================================
-class LivePlotCallback(BaseCallback):
+class PPOLivePlotCallback(BaseCallback):
     def __init__(self, plotter, name, color=None, plot_interval=100, verbose=0):
         super().__init__(verbose)
         self.plotter = plotter
@@ -139,7 +183,62 @@ class LivePlotCallback(BaseCallback):
 
         return True
     
+class DQNLivePlotCallback(BaseCallback):
+    def __init__(self, plotter, name, color=None, verbose=0):
+        super().__init__(verbose)
+        self.plotter = plotter
+        self.name = name
+        self.color = color
+        self.current_episode_reward = 0
+        self.current_episode_length = 0
 
+    def _on_training_start(self):
+        self.plotter.register_line(self.name, color=self.color)
+        self.plotter.register_dqn_line(self.name, color=self.color)
+
+    def _on_rollout_end(self):
+        # DQN has no rollout buffer or advantages — nothing to do here
+        pass
+
+    def _on_step(self):
+        rewards = self.locals.get("rewards")
+        dones = self.locals.get("dones")
+
+        for r, done in zip(rewards, dones):
+            self.current_episode_reward += r
+            self.current_episode_length += 1
+            if done:
+                self.plotter.update(self.name, self.current_episode_reward, self.current_episode_length)
+                wandb.log({
+                    "episode_reward": self.current_episode_reward,
+                    "timestep": self.num_timesteps
+                })
+                self.current_episode_reward = 0
+                self.current_episode_length = 0
+
+        # extract DQN internals - only available after learning starts
+        if self.model.num_timesteps > self.model.learning_starts:
+            loss = self.model.logger.name_to_value.get("train/loss", None)
+            eps  = self.model.exploration_rate
+
+            # use _last_obs instead of obs_tensor which is not available in DQN locals
+            obs_array = self.model._last_obs
+            obs_tensor = th.tensor(obs_array, dtype=th.float32).to(self.model.device)
+
+            with th.no_grad():
+                q_vals = self.model.policy.q_net(obs_tensor)
+                mean_q = q_vals.mean().item()
+
+            if loss is not None:
+                self.plotter.update_dqn(self.name, self.num_timesteps, loss, eps, mean_q)
+                wandb.log({
+                    "loss": loss,
+                    "exploration_rate": eps,
+                    "mean_q_value": mean_q,
+                    "timestep": self.num_timesteps
+                })
+
+        return True
 # =========================================================
 # Random Policy Runner
 # =========================================================
