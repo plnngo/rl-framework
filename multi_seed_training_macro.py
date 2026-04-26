@@ -15,7 +15,7 @@ from stable_baselines3.common.monitor import Monitor
 
 from MacroEnv import MacroEnv
 from multi_target_env import MultiTargetEnv
-from train_agent import SharedLivePlot, LivePlotCallback
+from train_agent import DQNLivePlotCallback, PPOLivePlotCallback, SharedLivePlot
 
 
 # =============================================================================
@@ -182,12 +182,10 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
         verbose=1,
     )
 
-    live_callback = LivePlotCallback(
-        plotter=plotter,
-        name=algo_name,
-        color=color,
-        plot_interval=50,
-    )
+    if algo_name == "PPO":
+        live_callback = PPOLivePlotCallback(plotter=plotter, name=algo_name, color=color)
+    elif algo_name == "DQN":
+        live_callback = DQNLivePlotCallback(plotter=plotter, name=algo_name, color=color)
 
     # Combine both callbacks
     callbacks = CallbackList([live_callback, eval_callback])
