@@ -1,5 +1,4 @@
 import copy
-import random
 import time
 import os
 import re
@@ -178,17 +177,11 @@ def run_random_policy_track(env, n_steps):
             print("No known targets available for tracking at step", step)
             break
 
-        #action = int(env.rng.choice(valid_ids))
-        action = 1
+        action = int(env.rng.choice(valid_ids))
         obs, reward, done, truncated, info = env.step(action)
         if len(info["lost_target"]) > 0:
             print(f"Step {step+1:02d}: lost target")
-        """ for tgt in range(env.n_targets):
-            exceed, x, P = analyse_tracking_task(obs, tgt, env, confidence=0.95)
-            if exceed:
-                exceed_target.append([tgt, step]) """
-
-
+      
         print(f"Step {step+1:02d}: TRACK target {action}, Reward={reward:.4f}")
 
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -238,124 +231,7 @@ def run_random_policy_track(env, n_steps):
             break
 
     # --- Show all figures together at the end ---
-    print(env.n_targets)
     #plt.show()
-    return np.array(positions), np.array(covariances)
-
-def run_random_policy_combined(env, n_steps):
-    """
-    Random policy combining SEARCH (macro=0) and TRACK (macro=1) actions.
-    Visualizes the environment state with uncertainty ellipses each step.
-    Highlights currently tracked target with red marker.
-    """
-    positions, covariances = [], []
-    fov_half = env.fov_size / 2.0
-
-    # Find grid indices closest to unknown targets for SEARCH
-    search_indices = []
-    for utgt in env.unknown_targets:
-        pos = utgt["x"][:2]
-        pos = np.array([pos[0] + 1, pos[1]])  # optional x offset
-        dists = np.linalg.norm(env.grid_coords - pos, axis=1)
-        grid_idx = np.argmin(dists)
-        search_indices.append(grid_idx)
-
-    print("Grid indices for initial unknown targets:", search_indices)
-
-    for step in range(n_steps):
-        # Choose macro action randomly: 0=SEARCH, 1=TRACK
-        macro = env.rng.choice([0, 1])
-
-        if macro == 0 and len(search_indices) > 0:
-            # SEARCH action sampling
-            grid_idx = search_indices[step % len(search_indices)]
-            action = {"macro": 0, "micro_search": grid_idx, "micro_track": 0}
-            current_tracked = None
-            print(f"Step {step+1:02d}: SEARCH at grid cell {grid_idx} pos {env.grid_coords[grid_idx]}")
-
-        else:
-            # TRACK action sampling
-            valid_ids = np.where(env.known_mask)[0]
-            if len(valid_ids) == 0:
-                # Fallback to SEARCH if no known targets
-                if len(search_indices) > 0:
-                    grid_idx = search_indices[step % len(search_indices)]
-                    action = {"macro": 0, "micro_search": grid_idx, "micro_track": 0}
-                    current_tracked = None
-                    print(f"Step {step+1:02d}: Fallback SEARCH at {grid_idx}")
-                else:
-                    print(f"Step {step+1:02d}: No known targets for TRACK or search indices, aborting.")
-                    break
-            else:
-                target_id = int(env.rng.choice(valid_ids))
-                action = {"macro": 1, "micro_search": 0, "micro_track": target_id}
-                current_tracked = target_id
-                print(f"Step {step+1:02d}: TRACK target {target_id}")
-
-        obs, reward, done, truncated, info = env.step(action)
-
-        # Visualization
-        fig, ax = plt.subplots(figsize=(8, 8))
-
-        # Draw all grid cells
-        for gx, gy in env.grid_coords:
-            rect = Rectangle(
-                (gx - fov_half, gy - fov_half),
-                env.fov_size,
-                env.fov_size,
-                edgecolor="lightgray",
-                facecolor="none",
-                linewidth=0.5,
-            )
-            ax.add_patch(rect)
-
-        # If SEARCH, draw FOV rectangle in green
-        if action["macro"] == 0:
-            search_pos = env.grid_coords[action["micro_search"]]
-            fov_rect = Rectangle(
-                (search_pos[0] - fov_half, search_pos[1] - fov_half),
-                env.fov_size,
-                env.fov_size,
-                edgecolor="green",
-                facecolor="none",
-                linestyle="--",
-                lw=2,
-            )
-            ax.add_patch(fov_rect)
-
-        # Plot known and unknown targets with colour coding
-        for tgt in env.targets:
-            if current_tracked is not None and tgt["id"] == current_tracked:
-                ax.scatter(tgt["x"][0], tgt["x"][1], c="red", s=120, marker="*", label="Tracked Target")
-                plot_cov_ellipse(tgt["P"][:2, :2], tgt["x"][:2], ax, edgecolor="red", alpha=0.7)
-            else:
-                ax.scatter(tgt["x"][0], tgt["x"][1], c="blue", s=40, marker="o", label="Known Target" if step == 0 else "")
-                plot_cov_ellipse(tgt["P"][:2, :2], tgt["x"][:2], ax, edgecolor="blue", alpha=0.3)
-
-        for utgt in env.unknown_targets:
-            ax.scatter(utgt["x"][0], utgt["x"][1], c="orange", label="Unknown Target" if step == 0 else "")
-            plot_cov_ellipse(utgt["P"][:2, :2], utgt["x"][:2], ax, edgecolor="orange", alpha=0.3)
-
-        ax.set_xlim(-env.space_size / 2, env.space_size / 2)
-        ax.set_ylim(-env.space_size / 2, env.space_size / 2)
-        ax.set_aspect("equal")
-        ax.set_title(f"Step {step+1}: {'TRACK target ' + str(current_tracked) if current_tracked is not None else 'SEARCH'}")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.grid(False)
-
-        handles, labels = ax.get_legend_handles_labels()
-        unique = dict(zip(labels, handles))
-        ax.legend(unique.values(), unique.keys(), loc="upper right")
-
-        plt.show(block=True)
-
-        positions.append([tgt['x'][:2] for tgt in env.targets + env.unknown_targets])
-        covariances.append([tgt['P'][:2, :2] for tgt in env.targets + env.unknown_targets])
-
-        if done or truncated:
-            break
-
     return np.array(positions), np.array(covariances)
 
 
@@ -808,8 +684,12 @@ def visualize_trained_agent(env, model, n_steps=20):
     fov_half = env.fov_size / 2.0
 
     for step in range(n_steps):
-        # --- Get action from trained DQN ---
-        action, _ = model.predict(obs, deterministic=False)
+        # --- Get action from trained agent ---
+        if isinstance(model, MaskablePPO):
+            action_masks = env.action_masks()
+            action, _ = model.predict(obs, action_masks=action_masks)
+        else:
+            action, _ = model.predict(obs, deterministic=False)
         macro, micro_search, micro_track = env.decode_action(action)
 
         # --- Apply action in environment ---
@@ -837,21 +717,6 @@ def visualize_trained_agent(env, model, n_steps=20):
             )
             ax.add_patch(rect)
         
-        """ # --- Draw reward window ---
-        rw_half = env.reward_window_size / 2.0
-        rw_center = env.reward_window_center
-        reward_rect = Rectangle(
-            (rw_center[0] - rw_half, rw_center[1] - rw_half),
-            env.reward_window_size,
-            env.reward_window_size,
-            edgecolor="magenta",
-            facecolor="none",
-            linestyle="-",
-            linewidth=2,
-            label="Reward Window"
-        )
-        ax.add_patch(reward_rect) """
-
         # --- Visualize the agent’s chosen action ---
         if macro == 0:  # SEARCH
             search_pos = env.grid_coords[micro_search]
@@ -2495,32 +2360,32 @@ def kalmanPlots():
 
 
 def main():
-    # ****** Test with random policy ******
+
     n_targets = 5
     seeds = [42, 123, 321]
     env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="track")
-    n_episodes = 2
+    n_episodes = 1
 
+    # Uncomment for test
     #visualize_initial_positions(env)
 
-    # Run random policy
-    #positions, covariances = run_random_policy_search(env, n_steps=10)
-    #positions, covariances = run_random_policy_track(env, n_steps=100)
-    #positions, covariances = run_random_policy_combined(env, n_steps=10)
+    # Uncomment for test
+    positions, covariances = run_random_policy_track(env, n_steps=10)
 
-    """ plot_positions(positions, env) 
+    #plot_positions(positions, env) 
 
-    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode="search")
 
     # Load trained model
-    model = PPO.load("agents/ppo_search_trained", env=env)
-    #model = DQN.load("agents/dqn_search_trained", env=env)
+    """ model = PPO.load("agents/ppo_search_trained_slowTargets_obsSpace4Channels", env=env)
+    mode = "search" """
+    model = MaskablePPO.load("agents/maskableppo_track_trained_IEEE_randomSpawn", env=env)
+    mode = "track"
+    env = MultiTargetEnv(n_targets=5, n_unknown_targets=100, seed=None, mode=mode)
+
 
     # Visualize trained agent
-    visualize_trained_agent(env, model, n_steps=30) """
-    
-#def anotherMethod():
-    
+    visualize_trained_agent(env, model, n_steps=10)
+     
 
     """ env = MultiTargetEnv(n_targets=n_targets, n_unknown_targets=100, seed=None, mode="search")
     n_episodes = 1
@@ -2719,9 +2584,9 @@ def main():
  """
  
 if __name__ == "__main__":
-    #main()
+    main()
     #kalmanPlots()
     #rmsePlot()
     #efficiencyPlot()
     #efficiencyOtherPlot()
-    computeKL()
+    #computeKL()
