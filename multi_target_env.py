@@ -9,7 +9,7 @@ from sb3_contrib import MaskablePPO
 from scipy.integrate import dblquad
 
 class MultiTargetEnv(gym.Env):
-    def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined"):
+    def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0, d_state=4, fov_size=4.0, max_steps=100, seed=None, mode="combined", boundary=np.sqrt(1e-2)):
         super().__init__()
 
         # ── Target counts ──────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ class MultiTargetEnv(gym.Env):
 
         # ── RNG and numerical stability ────────────────────────────────────────────
         self.rng = np.random.default_rng(seed)  # Seeded RNG for reproducibility
-        self.boundary = np.sqrt(2.0e-8)         # Small epsilon to avoid boundary singularities
+        self.boundary = boundary                # Small epsilon to avoid boundary singularities
 
         # ── Measurement noise covariance (R) ──────────────────────────────────────
         # R is a 2×2 diagonal matrix representing sensor noise in x and y

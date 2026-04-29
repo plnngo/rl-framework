@@ -25,7 +25,7 @@ class MacroEnv(gym.Env):
 
     def __init__(self, n_targets=5, n_unknown_targets=100, space_size=100.0,
                  d_state=4, fov_size=4.0, max_steps=100,
-                 search_agent=None, track_agent=None, seed=None, heuristicTracker=False):
+                 search_agent=None, track_agent=None, seed=None, heuristicTracker=False, boundary = np.sqrt(1.0e-2)):
         super().__init__()
 
         # --------------------
@@ -43,7 +43,7 @@ class MacroEnv(gym.Env):
         self.init_n_targets = n_targets
         self.init_n_unknown_targets = n_unknown_targets
         self.max_targets = self.init_n_targets + self.init_n_unknown_targets
-        self.boundary = np.sqrt(1.0e-2)
+        self.boundary = boundary
         self._last_prob_sum = 0.0
         
         self.observation_space = spaces.Box(

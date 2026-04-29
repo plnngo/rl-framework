@@ -42,7 +42,7 @@ class MacroRandomSeedEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
-    def __init__(self, seed_list, n_targets=5, n_unknown_targets=100, fov_size=4.0, heuristicTracker=True):
+    def __init__(self, seed_list, n_targets=5, n_unknown_targets=100, fov_size=4.0, heuristicTracker=True, boundary=np.sqrt(1e-2)):
         super().__init__()
 
         self.seed_list = seed_list
@@ -52,21 +52,23 @@ class MacroRandomSeedEnv(gym.Env):
         self.init_n_target = n_targets
         self.init_n_unknown_target = n_unknown_targets
         self.heuristicTracker = heuristicTracker
+        self.boundary = boundary
 
         # Build initial env to expose observation and action space
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)), heuristicTracker=True)
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed = int(np.random.choice(self.seed_list)), heuristicTracker=True, boundary=boundary)
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
 
     # Build a MacroEnv for a given seed
-    def _make_env(n_targets, n_unknown_targets, seed, heuristicTracker=False, tracker=None):
+    def _make_env(n_targets, n_unknown_targets, seed, heuristicTracker=False, tracker=None, boundary=np.sqrt(1e-2)):
+        boundary = boundary
         env_search = MultiTargetEnv(
             n_targets=n_targets, n_unknown_targets=n_unknown_targets,
-            seed=seed, mode="search"
+            seed=seed, mode="search", boundary=boundary
         )
         env_track = MultiTargetEnv(
             n_targets=n_targets, n_unknown_targets=n_unknown_targets,
-            seed=seed, mode="track"
+            seed=seed, mode="track", boundary=boundary
         )
         search_agent = PPO.load("agents/ppo_search_trained_slowTargets_obsSpace4Channels", env=env_search)
         if tracker == "dqn":
@@ -85,7 +87,7 @@ class MacroRandomSeedEnv(gym.Env):
 
     def reset(self, **kwargs):
         seed = int(np.random.choice(self.seed_list))
-        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed, heuristicTracker=self.heuristicTracker)
+        self.env = MacroRandomSeedEnv._make_env(self.n_targets, self.n_unknown_targets, seed, heuristicTracker=self.heuristicTracker, boundary=self.boundary)
         return self.env.reset(seed=seed)
 
     def step(self, action):
