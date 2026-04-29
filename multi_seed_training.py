@@ -13,7 +13,7 @@ from sb3_contrib.common.wrappers import ActionMasker
 import wandb
 
 from multi_target_env import MultiTargetEnv
-from train_agent import SharedLivePlot, LivePlotCallback  
+from train_agent import DQNLivePlotCallback, PPOLivePlotCallback, SharedLivePlot  
 
 
 # === CONFIG ===
@@ -150,12 +150,10 @@ def train_agent(algo_name, env, plotter, color, total_timesteps, save_dir):
     )
 
     # Create live plot callback
-    callback = LivePlotCallback(
-        plotter=plotter,
-        name=algo_name,
-        color=color,
-        plot_interval=50,
-    )
+    if algo_name == "PPO":
+        callback = PPOLivePlotCallback(plotter=plotter, name=algo_name, color=color)
+    elif algo_name == "DQN":
+        callback = DQNLivePlotCallback(plotter=plotter, name=algo_name, color=color)
 
     # Train model
     model.learn(total_timesteps=total_timesteps, callback=callback)
