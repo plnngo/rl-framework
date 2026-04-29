@@ -243,11 +243,6 @@ def select_best_action_IG(env, dt=None):
 
     return best_target_id, best_ig, best_update
 
-def select_best_macro_action(env):
-    obs = env._get_obs()
-    known_obs = obs[env.known_mask]
-    return 1 if np.any(known_obs <= env.threshold_fov) else 0
-
 def select_best_pointingToFind(env):
     obj = random.choice(env.unknown_targets)
 
